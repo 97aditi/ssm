@@ -577,7 +577,10 @@ class SLDS(object):
                                       tags,
                                       emission_optimizer,
                                       emission_optimizer_maxiter,
-                                      alpha):
+                                      alpha,
+                                      dynamics_dales_constraint=False,
+                                      dynamics_diagonal_zero=False,
+                                      emission_block_diagonal=False,):
 
         # Compute necessary expectations either analytically or via samples
         continuous_samples = variational_posterior.sample_continuous_states()
@@ -597,8 +600,10 @@ class SLDS(object):
                       datas=continuous_samples,
                       inputs=inputs,
                       masks=xmasks,
-                      tags=tags
-        )
+                      tags=tags,
+                      dynamics_dales_constraint=dynamics_dales_constraint,
+                      dynamics_diagonal_zero=dynamics_diagonal_zero
+                        )
         exact_m_step_dynamics = [
            obs.AutoRegressiveObservations,
            obs.AutoRegressiveObservationsNoInput,
@@ -616,11 +621,16 @@ class SLDS(object):
             self.dynamics.params = convex_combination(curr_prms, self.dynamics.params, alpha)
 
         # Update emissions params. This is always approximate (at least for now).
+   
+        if emission_block_diagonal>0:
+            # only allowed for gaussian emissions or gaussian orthogonal emissions
+            assert isinstance(self.emissions, emssn.GaussianEmissions), "emission_block_diagonal only allowed for GaussianEmissions"
+
         curr_prms = copy.deepcopy(self.emissions.params)
         self.emissions.m_step(discrete_expectations, continuous_samples,
                               datas, inputs, masks, tags,
                               optimizer=emission_optimizer,
-                              maxiter=emission_optimizer_maxiter)
+                              maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal)
         self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
 
     def _laplace_em_elbo(self,
@@ -671,7 +681,10 @@ class SLDS(object):
                         emission_optimizer="lbfgs",
                         emission_optimizer_maxiter=100,
                         alpha=0.5,
-                        learning=True):
+                        learning=True,
+                        dynamics_dales_constraint=False,
+                        dynamics_diagonal_zero=False,
+                        emission_block_diagonal=False,):
         """
         Fit an approximate posterior p(z, x | y) \approx q(z) q(x).
         Perform block coordinate ascent on q(z) followed by q(x).
@@ -698,7 +711,7 @@ class SLDS(object):
             if learning:
                 self._fit_laplace_em_params_update(
                     variational_posterior, datas, inputs, masks, tags,
-                    emission_optimizer, emission_optimizer_maxiter, alpha)
+                    emission_optimizer, emission_optimizer_maxiter, alpha, dynamics_dales_constraint, dynamics_diagonal_zero, emission_block_diagonal)
 
             elbos.append(self._laplace_em_elbo(
                 variational_posterior, datas, inputs, masks, tags))
@@ -750,6 +763,8 @@ class SLDS(object):
             discrete_state_init_method="random",
             num_init_iters=25,
             num_init_restarts=1,
+            dynamics_kwargs=None,
+            emission_kwargs=None,
             **kwargs):
 
         """
@@ -787,9 +802,17 @@ class SLDS(object):
         variational_posterior_kwargs = variational_posterior_kwargs or {}
         posterior = self._make_variational_posterior(
             variational_posterior, datas, inputs, masks, tags, method, **variational_posterior_kwargs)
+
+        # added dynamics_kwargs to contain information about any constraints on the dynamics matrix, such as if columns should obey dale's law (dynamics_dales_constraint contains fraction of positive columns) and if the diagonal should be zero (dynamics_diagonal_zero)
+
+        # added emission_kwargs to impose block-sparse structure on the emission matrix (emission_block_diagonal contains fraction of nonzero blocks column wise)
+
+        dynamics_kwargs = dynamics_kwargs or {}
+        emission_kwargs = emission_kwargs or {}
+
         elbos = _fitting_methods[method](
             posterior, datas, inputs, masks, tags, verbose,
-            learning=True, **kwargs)
+            learning=True, **dynamics_kwargs, **emission_kwargs, **kwargs)
         return elbos, posterior
 
     @ensure_args_are_lists
@@ -834,6 +857,7 @@ class LDS(SLDS):
             emissions="gaussian_orthog",
             emission_kwargs=None,
             **kwargs):
+
 
         # Make the dynamics distn
         dynamics_classes = dict(

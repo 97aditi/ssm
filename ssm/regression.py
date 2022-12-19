@@ -47,7 +47,8 @@ def fit_linear_regression(Xs, ys,
                           prior_ExxT=None,
                           prior_ExyT=None,
                           nu0=1,
-                          Psi0=1
+                          Psi0=1,
+                          block_diagonal = False,
                           ):
     """
     Fit a linear regression y_i ~ N(Wx_i + b, diag(S)) for W, b, S.
@@ -123,7 +124,29 @@ def fit_linear_regression(Xs, ys,
         check_shape(EyyT, "EyyT", (d, d))
 
     # Solve for the MAP estimate
-    W_full = np.linalg.solve(ExxT, ExyT).T
+    if block_diagonal>0:
+        # add a constraint to the regression matrix so that it is block diagonal
+        # W is (p+fit_intercept) X d, so we want the the top right p*block_diagonal X N*block_diagonal to be zero
+        def constraint_1(W):
+            W_block = W.reshape((x_dim,d))[:int(block_diagonal*p), int(block_diagonal*d):]
+            return W_block.flatten()
+
+        def constraint2_W(W):
+            W_block = W.reshape((x_dim,d))[int(block_diagonal*p):p, :int(block_diagonal*d)]
+            return W_block.flatten()
+
+        constr1 = {'type': 'eq', 'fun': constraint_1}
+        # We also want the bottom left d*block_diagonal X p*block_diagonal to be zero
+        constr2 = {'type': 'eq', 'fun': constraint2_W}
+        # use scipy.optimize.minimize to solve the constrained problem
+        def get_W(W):
+            W = W.reshape((x_dim,d))
+            return np.linalg.norm(ExyT - ExxT@W)
+
+        W_full = minimize(get_W, x0 = np.zeros((x_dim*d,)), constraints=(constr1, constr2)).x.reshape((x_dim,d)).T
+    else:
+        W_full = np.linalg.solve(ExxT, ExyT).T
+
     if fit_intercept:
         W, b = W_full[:, :-1], W_full[:, -1]
     else:

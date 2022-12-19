@@ -3,6 +3,7 @@ import warnings
 
 import autograd.numpy as np
 import autograd.numpy.random as npr
+import scipy
 
 from autograd.scipy.special import gammaln, digamma, logsumexp
 from autograd.scipy.special import logsumexp
@@ -1139,8 +1140,41 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         Vs = np.zeros((K, D, M))
         bs = np.zeros((K, D))
         Sigmas = np.zeros((K, D, D))
+
+        # check if there are constraints on the dynamics
+        dynamics_dales_constraint = kwargs.get('dynamics_dales_constraint', False)
+        dynamics_diagonal_zero = kwargs.get('dynamics_diagonal_zero', False)
+
         for k in range(K):
-            Wk = np.linalg.solve(ExuxuTs[k] + self.J0[k], ExuyTs[k] + self.h0[k]).T
+            if dynamics_dales_constraint>0:
+                # this contains the fraction of positive columns in the dynamics matrix
+
+                # TODO: 
+                #   1. allow M>0
+                
+                assert lags==1, "Only lags==1 is supported for now" 
+                assert M==0, "Only M==0 is supported for now"
+             
+                # modifying this to scipy.optimize so as to put dale's law constraints on A
+                def get_W(W):
+                    W = W.reshape(D*lags+1, D)
+                    return np.linalg.norm(ExuyTs[k] + self.h0[k] - (ExuxuTs[k] + self.J0[k])@W)
+                
+                # choose how many columns should be positive
+                positive_cols = int(dynamics_dales_constraint*D)
+                # add constraints such that first D*(D/2) elements are positive and next D*(D/2) elements are negative
+                constr1 = {'type': 'ineq', 'fun': lambda W: W[:D*positive_cols]}
+                constr2 = {'type': 'ineq', 'fun': lambda W: -W[D*positive_cols:D*(D)]}
+
+                # add an additional constraint that the diagonal elements are 0
+                if dynamics_diagonal_zero:
+                    constr3 = {'type': 'eq', 'fun': lambda W: W[0:D*D:D+1]}
+                    Wk = scipy.optimize.minimize(get_W, x0 = np.zeros(D*(D*lags+1)), constraints = (constr1, constr2, constr3)).x.reshape(D*lags+1, D).T
+                else:
+                    Wk = scipy.optimize.minimize(get_W, x0 = np.zeros(D*(D*lags+1)), constraints = (constr1, constr2)).x.reshape(D*lags+1, D).T
+
+            else:
+                Wk = np.linalg.solve(ExuxuTs[k] + self.J0[k], ExuyTs[k] + self.h0[k]).T
             As[k] = Wk[:, :D * lags]
             Vs[k] = Wk[:, D * lags:-1]
             bs[k] = Wk[:, -1]
