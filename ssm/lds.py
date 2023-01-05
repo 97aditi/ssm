@@ -580,7 +580,8 @@ class SLDS(object):
                                       alpha,
                                       dynamics_dales_constraint=False,
                                       dynamics_diagonal_zero=False,
-                                      emission_block_diagonal=False,):
+                                      emission_block_diagonal=False,
+                                      emission_positive=False,):
 
         # Compute necessary expectations either analytically or via samples
         continuous_samples = variational_posterior.sample_continuous_states()
@@ -625,12 +626,16 @@ class SLDS(object):
         if emission_block_diagonal>0:
             # only allowed for gaussian emissions or gaussian orthogonal emissions
             assert isinstance(self.emissions, emssn.GaussianEmissions), "emission_block_diagonal only allowed for GaussianEmissions"
+        if emission_positive>0:
+            # only allowed for gaussian emissions or gaussian orthogonal emissions
+            assert isinstance(self.emissions, emssn.GaussianEmissions), "emission_positive only allowed for GaussianEmissions"
 
         curr_prms = copy.deepcopy(self.emissions.params)
         self.emissions.m_step(discrete_expectations, continuous_samples,
                               datas, inputs, masks, tags,
                               optimizer=emission_optimizer,
-                              maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal)
+                              maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
+                              emission_positive=emission_positive)
         self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
 
     def _laplace_em_elbo(self,
@@ -684,7 +689,8 @@ class SLDS(object):
                         learning=True,
                         dynamics_dales_constraint=False,
                         dynamics_diagonal_zero=False,
-                        emission_block_diagonal=False,):
+                        emission_block_diagonal=False,
+                        emission_positive=False,):
         """
         Fit an approximate posterior p(z, x | y) \approx q(z) q(x).
         Perform block coordinate ascent on q(z) followed by q(x).
@@ -711,7 +717,8 @@ class SLDS(object):
             if learning:
                 self._fit_laplace_em_params_update(
                     variational_posterior, datas, inputs, masks, tags,
-                    emission_optimizer, emission_optimizer_maxiter, alpha, dynamics_dales_constraint, dynamics_diagonal_zero, emission_block_diagonal)
+                    emission_optimizer, emission_optimizer_maxiter, alpha, dynamics_dales_constraint, dynamics_diagonal_zero, emission_block_diagonal,
+                    emission_positive,)
 
             elbos.append(self._laplace_em_elbo(
                 variational_posterior, datas, inputs, masks, tags))
@@ -805,7 +812,7 @@ class SLDS(object):
 
         # added dynamics_kwargs to contain information about any constraints on the dynamics matrix, such as if columns should obey dale's law (dynamics_dales_constraint contains fraction of positive columns) and if the diagonal should be zero (dynamics_diagonal_zero)
 
-        # added emission_kwargs to impose block-sparse structure on the emission matrix (emission_block_diagonal contains fraction of nonzero blocks column wise)
+        # added emission_kwargs to impose block-sparse structure / positivity on the emission matrix (emission_block_diagonal contains fraction of nonzero blocks column wise)
 
         dynamics_kwargs = dynamics_kwargs or {}
         emission_kwargs = emission_kwargs or {}

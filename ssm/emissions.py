@@ -74,13 +74,16 @@ class Emissions(object):
 
     def m_step(self, discrete_expectations, continuous_expectations,
                datas, inputs, masks, tags,
-               optimizer="bfgs", maxiter=100, emission_block_diagonal = False, **kwargs):
+               optimizer="bfgs", maxiter=100, emission_block_diagonal = False, 
+               emission_positive = False, **kwargs):
         """
         If M-step in Laplace-EM cannot be done in closed form for the emissions, default to SGD.
         """
 
         if emission_block_diagonal>0:
             raise ValueError("Block diagonal emissions not implemented for this Emissions class.")
+        if emission_positive>0:
+            raise ValueError("Positive emissions not implemented for this Emissions class.")
 
         optimizer = dict(adam=adam, bfgs=bfgs, lbfgs=lbfgs, rmsprop=rmsprop, sgd=sgd)[optimizer]
 
@@ -419,12 +422,14 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         ws = [Ez for (Ez, _, _) in discrete_expectations]
 
         block_diagonal = kwargs.get('emission_block_diagonal', False)
+        positive = kwargs.get('emission_positive', False)
         if self.single_subspace and all([np.all(mask) for mask in masks]):
             # Return exact m-step updates for C, F, d, and inv_etas
             CF, d, Sigma = fit_linear_regression(
                 Xs, ys,
                 prior_ExxT=1e-4 * np.eye(self.D + self.M + 1),
-                prior_ExyT=np.zeros((self.D + self.M + 1, self.N)), block_diagonal=block_diagonal)
+                prior_ExyT=np.zeros((self.D + self.M + 1, self.N)), block_diagonal=block_diagonal,
+                positive=positive)
             self.Cs = CF[None, :, :self.D]
             self.Fs = CF[None, :, self.D:]
             self.ds = d[None, :]
@@ -432,6 +437,8 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         else:
             if block_diagonal:
                 raise ValueError("Block diagonal updates not supported for non-single-subspace models") 
+            if positive:
+                raise ValueError("Positive updates not supported for non-single-subspace models")
             Cs, Fs, ds, inv_etas = [], [], [], []
             for k in range(self.K):
                 CF, d, Sigma = fit_linear_regression(

@@ -49,6 +49,7 @@ def fit_linear_regression(Xs, ys,
                           nu0=1,
                           Psi0=1,
                           block_diagonal = False,
+                          positive = False
                           ):
     """
     Fit a linear regression y_i ~ N(Wx_i + b, diag(S)) for W, b, S.
@@ -123,6 +124,10 @@ def fit_linear_regression(Xs, ys,
         check_shape(ExyT, "ExyT", (x_dim, d))
         check_shape(EyyT, "EyyT", (d, d))
 
+    # positivity constraint should only be applied when block diagonal constraint is active
+    if positive and block_diagonal==0:
+        raise ValueError("The positivity constraint should only be applied when block diagonal constraint is active")
+
     # Solve for the MAP estimate
     if block_diagonal>0:
         # add a constraint to the regression matrix so that it is block diagonal
@@ -138,12 +143,18 @@ def fit_linear_regression(Xs, ys,
         constr1 = {'type': 'eq', 'fun': constraint_1}
         # We also want the bottom left d*block_diagonal X p*block_diagonal to be zero
         constr2 = {'type': 'eq', 'fun': constraint2_W}
+        # add a positivity constraint also
+        constr3 = {'type': 'ineq', 'fun': lambda W: W}
+
         # use scipy.optimize.minimize to solve the constrained problem
         def get_W(W):
             W = W.reshape((x_dim,d))
             return np.linalg.norm(ExyT - ExxT@W)
 
-        W_full = minimize(get_W, x0 = np.zeros((x_dim*d,)), constraints=(constr1, constr2)).x.reshape((x_dim,d)).T
+        if positive==False:
+            W_full = minimize(get_W, x0 = np.zeros((x_dim*d,)), constraints=(constr1, constr2)).x.reshape((x_dim,d)).T
+        else:
+            W_full = minimize(get_W, x0 = np.zeros((x_dim*d,)), constraints=(constr1, constr2, constr3)).x.reshape((x_dim,d)).T
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T
 
