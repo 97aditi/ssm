@@ -575,6 +575,7 @@ class SLDS(object):
                                       inputs,
                                       masks,
                                       tags,
+                                      init_nnmf,
                                       emission_optimizer,
                                       emission_optimizer_maxiter,
                                       alpha,
@@ -610,6 +611,11 @@ class SLDS(object):
            obs.AutoRegressiveObservationsNoInput,
            obs.AutoRegressiveDiagonalNoiseObservations,
         ]
+
+        if init_nnmf is not None:
+            self.dynamics.A = init_nnmf[0]
+            self.emissions.Cs[0] = init_nnmf[1]
+            
         if type(self.dynamics) in exact_m_step_dynamics and self.dynamics.lags == 1:
             # In this case, we can do an exact M-step on the dynamics by passing
             # in the true sufficient statistics for the continuous state.
@@ -678,6 +684,7 @@ class SLDS(object):
     def _fit_laplace_em(self, variational_posterior, datas,
                         inputs=None, masks=None, tags=None,
                         verbose = 2,
+                        init_nnmf=None,
                         num_iters=100,
                         num_samples=1,
                         continuous_optimizer="newton",
@@ -716,8 +723,7 @@ class SLDS(object):
             # Update parameters
             if learning:
                 self._fit_laplace_em_params_update(
-                    variational_posterior, datas, inputs, masks, tags,
-                    emission_optimizer, emission_optimizer_maxiter, alpha, dynamics_dales_constraint, dynamics_diagonal_zero, emission_block_diagonal,
+                    variational_posterior, datas, inputs, masks, tags, init_nnmf, emission_optimizer, emission_optimizer_maxiter, alpha, dynamics_dales_constraint, dynamics_diagonal_zero, emission_block_diagonal,
                     emission_positive,)
 
             elbos.append(self._laplace_em_elbo(
@@ -767,6 +773,7 @@ class SLDS(object):
             method="laplace_em", variational_posterior="structured_meanfield",
             variational_posterior_kwargs=None,
             initialize=True,
+            init_nnmf=None,
             discrete_state_init_method="random",
             num_init_iters=25,
             num_init_restarts=1,
@@ -818,7 +825,7 @@ class SLDS(object):
         emission_kwargs = emission_kwargs or {}
 
         elbos = _fitting_methods[method](
-            posterior, datas, inputs, masks, tags, verbose,
+            posterior, datas, inputs, masks, tags, verbose, init_nnmf,
             learning=True, **dynamics_kwargs, **emission_kwargs, **kwargs)
         return elbos, posterior
 
