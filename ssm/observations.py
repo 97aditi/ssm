@@ -15,6 +15,8 @@ from ssm.preprocessing import interpolate_data
 from ssm.cstats import robust_ar_statistics
 from ssm.optimizers import adam, bfgs, rmsprop, sgd, lbfgs
 import ssm.stats as stats
+import cvxpy as cp
+
 
 class Observations(object):
     # K = number of discrete states
@@ -1155,24 +1157,39 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 assert lags==1, "Only lags==1 is supported for now" 
                 assert M==0, "Only M==0 is supported for now"
              
-                # modifying this to scipy.optimize so as to put dale's law constraints on A
-                def get_W(W):
-                    W = W.reshape(D*lags+1, D)
-                    return np.linalg.norm(ExuyTs[k] + self.h0[k] - (ExuxuTs[k] + self.J0[k])@W)
+                # """ Here we used scipy.optimize to solve the linear regression problem"""
+                # # modifying this to scipy.optimize so as to put dale's law constraints on A
+                # def get_W(W):
+                #     W = W.reshape(D*lags+1, D)
+                #     return np.linalg.norm(ExuyTs[k] + self.h0[k] - (ExuxuTs[k] + self.J0[k])@W)
                 
-                # choose how many columns should be positive
+                # # choose how many columns should be positive
+                # positive_cols = int(dynamics_dales_constraint*D)
+                # # add constraints such that first D*(D/2) elements are positive and next D*(D/2) elements are negative
+                # constr1 = {'type': 'ineq', 'fun': lambda W: W[:D*positive_cols]}
+                # constr2 = {'type': 'ineq', 'fun': lambda W: -W[D*positive_cols:D*(D)]}
+
+                # # add an additional constraint that the diagonal elements are 0
+                # if dynamics_diagonal_zero:
+                #     constr3 = {'type': 'eq', 'fun': lambda W: W[0:D*D:D+1]}
+                #     Wk = scipy.optimize.minimize(get_W, x0 = np.zeros(D*(D*lags+1)), constraints = (constr1, constr2, constr3)).x.reshape(D*lags+1, D).T
+                # else:
+                #     Wk = scipy.optimize.minimize(get_W, x0 = np.zeros(D*(D*lags+1)), constraints = (constr1, constr2)).x.reshape(D*lags+1, D).T
+
+                """ Here we used cvxpy to solve the linear regression problem"""
+                # modifying this to cvxpy so as to put dale's law
+                W = cp.Variable((D*lags+1, D))
+                # put dales law constraints on A
                 positive_cols = int(dynamics_dales_constraint*D)
+     
                 # add constraints such that first D*(D/2) elements are positive and next D*(D/2) elements are negative
-                constr1 = {'type': 'ineq', 'fun': lambda W: W[:D*positive_cols]}
-                constr2 = {'type': 'ineq', 'fun': lambda W: -W[D*positive_cols:D*(D)]}
-
-                # add an additional constraint that the diagonal elements are 0
-                if dynamics_diagonal_zero:
-                    constr3 = {'type': 'eq', 'fun': lambda W: W[0:D*D:D+1]}
-                    Wk = scipy.optimize.minimize(get_W, x0 = np.zeros(D*(D*lags+1)), constraints = (constr1, constr2, constr3)).x.reshape(D*lags+1, D).T
-                else:
-                    Wk = scipy.optimize.minimize(get_W, x0 = np.zeros(D*(D*lags+1)), constraints = (constr1, constr2)).x.reshape(D*lags+1, D).T
-
+                constraints = [W[:positive_cols, :] >= 0, W[positive_cols:D, :] <= 0]
+                objective = cp.Minimize(cp.norm(ExuyTs[k] + self.h0[k] - (ExuxuTs[k] + self.J0[k])@W, 'fro'))
+                # solve the problem
+                prob = cp.Problem(objective, constraints)
+                prob.solve(solver = cp.SCS, verbose = False)
+                Wk = W.value.T
+    
             else:
                 Wk = np.linalg.solve(ExuxuTs[k] + self.J0[k], ExuyTs[k] + self.h0[k]).T
             As[k] = Wk[:, :D * lags]

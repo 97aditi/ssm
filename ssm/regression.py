@@ -10,6 +10,7 @@ from scipy.special import polygamma, digamma
 from scipy.optimize import minimize
 from warnings import warn
 from ssm.util import check_shape
+import cvxpy as cp
 
 mean_functions = dict(
     identity=lambda x: x,
@@ -130,31 +131,46 @@ def fit_linear_regression(Xs, ys,
 
     # Solve for the MAP estimate
     if block_diagonal>0:
-        # add a constraint to the regression matrix so that it is block diagonal
-        # W is (p+fit_intercept) X d, so we want the the top right p*block_diagonal X N*block_diagonal to be zero
-        def constraint_1(W):
-            W_block = W.reshape((x_dim,d))[:int(block_diagonal*p), int(block_diagonal*d):]
-            return W_block.flatten()
+        # """ This section uses sciy.optimize.minimize to solve for the MAP estimate taking into account the constraints """
+        # # add a constraint to the regression matrix so that it is block diagonal
+        # # W is (p+fit_intercept) X d, so we want the the top right p*block_diagonal X N*block_diagonal to be zero
+        # def constraint_1(W):
+        #     W_block = W.reshape((x_dim,d))[:int(block_diagonal*p), int(block_diagonal*d):]
+        #     return W_block.flatten()
 
-        def constraint2_W(W):
-            W_block = W.reshape((x_dim,d))[int(block_diagonal*p):p, :int(block_diagonal*d)]
-            return W_block.flatten()
+        # def constraint2_W(W):
+        #     W_block = W.reshape((x_dim,d))[int(block_diagonal*p):p, :int(block_diagonal*d)]
+        #     return W_block.flatten()
 
-        constr1 = {'type': 'eq', 'fun': constraint_1}
-        # We also want the bottom left d*block_diagonal X p*block_diagonal to be zero
-        constr2 = {'type': 'eq', 'fun': constraint2_W}
-        # add a positivity constraint also
-        constr3 = {'type': 'ineq', 'fun': lambda W: W}
+        # constr1 = {'type': 'eq', 'fun': constraint_1}
+        # # We also want the bottom left d*block_diagonal X p*block_diagonal to be zero
+        # constr2 = {'type': 'eq', 'fun': constraint2_W}
+        # # add a positivity constraint also
+        # constr3 = {'type': 'ineq', 'fun': lambda W: W}
 
-        # use scipy.optimize.minimize to solve the constrained problem
-        def get_W(W):
-            W = W.reshape((x_dim,d))
-            return np.linalg.norm(ExyT - ExxT@W)
+        # # use scipy.optimize.minimize to solve the constrained problem
+        # def get_W(W):
+        #     W = W.reshape((x_dim,d))
+        #     return np.linalg.norm(ExyT - ExxT@W)
 
-        if positive==False:
-            W_full = minimize(get_W, x0 = np.zeros((x_dim*d,)), constraints=(constr1, constr2)).x.reshape((x_dim,d)).T
-        else:
-            W_full = minimize(get_W, x0 = np.zeros((x_dim*d,)), constraints=(constr1, constr2, constr3)).x.reshape((x_dim,d)).T
+        # if positive==False:
+        #     W_full = minimize(get_W, x0 = np.zeros((x_dim*d,)), constraints=(constr1, constr2)).x.reshape((x_dim,d)).T
+        # else:
+        #     W_full = minimize(get_W, x0 = np.zeros((x_dim*d,)), constraints=(constr1, constr2, constr3)).x.reshape((x_dim,d)).T
+
+        """ Here we use cvxpy to solve the constrained problem """
+        W = cp.Variable((x_dim,d))
+        # add constraints such that W is block diagonal 
+        constraints = [W[:int(block_diagonal*p), int(block_diagonal*d):] == 0, W[int(block_diagonal*p):p, :int(block_diagonal*d)] == 0]
+        if positive:
+            constraints.append(W>=0)
+        # add the objective function
+        objective = cp.Minimize(cp.norm(ExyT - ExxT@W, 'fro'))
+        # solve the problem
+        prob = cp.Problem(objective, constraints,)
+        prob.solve(solver = cp.SCS, verbose = False)
+        W_full = W.value.T
+
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T
 
