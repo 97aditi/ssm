@@ -11,6 +11,8 @@ from scipy.optimize import minimize
 from warnings import warn
 from ssm.util import check_shape
 import cvxpy as cp
+from joblib import Parallel, delayed
+import multiprocessing
 
 mean_functions = dict(
     identity=lambda x: x,
@@ -131,21 +133,57 @@ def fit_linear_regression(Xs, ys,
 
     # Solve for the MAP estimate
     if block_diagonal>0:
-    
-        # solve the constrained problem for each block
         """ Here we use cvxpy to solve the constrained problem """
-        W = cp.Variable((x_dim,d))  
-        # add constraints such that W is block diagonal 
-        constraints = [W[:int(block_diagonal*p), int(block_diagonal*d):] == 0, W[int(block_diagonal*p):p, :int(block_diagonal*d)] == 0]
-        if positive:
-            constraints.append(W>=0)
-        # add the objective function
-        objective = cp.Minimize(cp.norm(ExyT - ExxT@W, 'fro'))
-        # solve the problem
-        prob = cp.Problem(objective, constraints,)
-        prob.solve(solver = cp.MOSEK, verbose = False)
-        W_full = W.value.T
 
+        # compute expectations separately for excitatory and inhibitory blocks
+        ExxT_exc = ExxT[:int(block_diagonal*p), :int(block_diagonal*p)]
+        ExxT_inh = ExxT[int(block_diagonal*p):p, int(block_diagonal*p):p]
+        # append the covariance of the intercept term
+        if fit_intercept:
+            ExxT_exc = np.vstack((ExxT_exc, ExxT[:int(block_diagonal*p), -1].reshape(1, -1)))
+            ExxT_exc = np.hstack((ExxT_exc, np.vstack((ExxT[-1, :int(block_diagonal*p)].reshape(-1, 1), ExxT[-1, -1]))))
+            ExxT_inh = np.vstack((ExxT_inh, ExxT[int(block_diagonal*p):p, -1].reshape(1, -1)))
+            ExxT_inh = np.hstack((ExxT_inh, np.vstack((ExxT[-1, int(block_diagonal*p):p].reshape(-1, 1), ExxT[-1, -1]))))      
+
+        ExyT_exc = ExyT[:int(block_diagonal*p), :int(block_diagonal*d)]
+        ExyT_inh = ExyT[int(block_diagonal*p):p, int(block_diagonal*d):d]
+        # append the covariance of the intercept term
+        if fit_intercept:
+            ExyT_exc = np.vstack((ExyT_exc, ExyT[-1, :int(block_diagonal*d)].reshape(1, -1)))
+            ExyT_inh = np.vstack((ExyT_inh, ExyT[-1, int(block_diagonal*d):].reshape(1, -1)))
+
+        # concatenate the excitatory and inhibitory blocks 
+        ExxT_block = [ExxT_exc, ExxT_inh]
+        ExyT_block = [ExyT_exc, ExyT_inh]
+
+        def solve_block(ExxT_block, ExyT_block, positive):
+            W_block = cp.Variable((ExxT_block.shape[0], ExyT_block.shape[1]))
+            # add constraints such that W is positive
+            constraints = []
+            if positive:
+                constraints.append(W_block>=0)
+            # add the objective function
+            objective = cp.Minimize(cp.norm(ExyT_block - ExxT_block@W_block, 'fro'))
+            # solve the problem
+            prob = cp.Problem(objective, constraints)
+            prob.solve(solver=cp.MOSEK, verbose=False)
+            return W_block.value.T
+         
+        # solve the constrained problem for each block in parallel
+        results = Parallel(n_jobs=2, verbose=False)(
+            delayed(solve_block)(ExxT_block, ExyT_block, positive)
+            for ExxT_block, ExyT_block in zip(ExxT_block, ExyT_block))
+
+        W_exc, W_inh = results[0], results[1]
+        # make a block diagonal matrix from the excitatory and inhibitory blocks
+        W_full = np.zeros((d, x_dim))
+        W_full[:int(block_diagonal*d), :int(block_diagonal*p)] = W_exc[:int(block_diagonal*d), :int(block_diagonal*p)]
+        W_full[int(block_diagonal*d):, int(block_diagonal*p):p] = W_inh[:int((1-block_diagonal)*d), :int((1-block_diagonal)*p)]
+        # append the intercept term
+        if fit_intercept:
+            W_full[:int(block_diagonal*d), -1] = W_exc[:int(block_diagonal*d), -1]
+            W_full[int(block_diagonal*d):, -1] = W_inh[:int((1-block_diagonal)*d), -1]
+        
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T
 

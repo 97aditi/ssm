@@ -162,7 +162,7 @@ class SLDS(object):
                    verbose=0,
                    num_init_iters=50,
                    discrete_state_init_method="random",
-                   num_init_restarts=1):
+                   num_init_restarts=1,):
         # First initialize the observation model
         self.emissions.initialize(datas, inputs, masks, tags)
 
@@ -202,6 +202,64 @@ class SLDS(object):
         self.init_state_distn = copy.deepcopy(best_arhmm.init_state_distn)
         self.transitions = copy.deepcopy(best_arhmm.transitions)
         self.dynamics = copy.deepcopy(best_arhmm.observations)
+
+        
+    def initialize_with_nnmf(self, init_nnmf, datas, inputs=None, masks=None, tags=None,
+                   verbose=0,
+                   num_init_iters=50,
+                   discrete_state_init_method="random",
+                   num_init_restarts=1,):
+
+        # currently only valid for gaussian emissions
+        assert isinstance(self.emissions, emssn.GaussianEmissions), "Currently only valid for Gaussian emissions"
+        # currently only valid for no inputs
+        assert self.M==0, "Currently only valid for no inputs"
+        
+        # First initialize the observation model, with the first element in the NNMF list
+        emission_init = init_nnmf[1].T
+        # Assign each state a random projection of the emission_init
+        Keff = 1 if self.emissions.single_subspace else self.K
+        Cs, ds = [], []
+        for k in range(Keff):
+            weights = npr.randn(self.D, self.D * Keff)
+            weights = np.linalg.svd(weights, full_matrices=False)[2]
+            if Keff == 1:
+                Cs.append(init_nnmf[1])
+            else:
+                Cs.append((weights @ emission_init).T)
+            ds.append(np.mean(np.concatenate(datas), axis=0))
+
+        self.emissions.Cs = np.array(Cs)
+        self.emissions.ds = np.array(ds)
+
+       # Get the initialized variational mean for the data
+        xs = [self.emissions.invert(data, input, mask, tag)
+              for data, input, mask, tag in zip(datas, inputs, masks, tags)]
+        xmasks = [np.ones_like(x, dtype=bool) for x in xs]
+        
+        # no compute the noise in y = Cx + d+ noise
+        noise = np.concatenate([data - x@C.T - d for data, x, C, d in zip(datas, xs, Cs, ds)])
+        # find the variance of each dimension
+        var = np.var(noise, axis=0)
+        # set the variance of the emission model
+        self.emissions.inv_etas[:,...] = np.log(var)
+
+        # now initialize the dynamics model
+        # only valid for k=1
+        assert self.K==1, "Currently only valid for K=1"
+
+        self.dynamics.As = np.array([init_nnmf[0]])
+        # compute the bias as the mean of the xs
+        self.dynamics.bs = np.array([np.mean(np.concatenate(xs), axis=0)])
+        # now let's compute noise
+        noise = np.concatenate([x[1:] - x[:-1]@A.T - b for x, A, b in zip(xs, self.dynamics.As, self.dynamics.bs)])
+        # find the variance of each dimension
+        var = np.var(noise, axis=0)
+        # set the variance of the dynamics model
+        self.dynamics._sqrt_Sigmas = np.array([np.diag(np.sqrt(var))])
+
+        print(self.init_state_distn.params)
+        print(self.transitions.params)
 
     def permute(self, perm):
         """
@@ -575,7 +633,6 @@ class SLDS(object):
                                       inputs,
                                       masks,
                                       tags,
-                                      init_nnmf,
                                       emission_optimizer,
                                       emission_optimizer_maxiter,
                                       alpha,
@@ -612,10 +669,6 @@ class SLDS(object):
            obs.AutoRegressiveDiagonalNoiseObservations,
         ]
 
-        if init_nnmf is not None:
-            self.dynamics.As[0] = init_nnmf[0]
-            self.dynamics.A = init_nnmf[0]
-            self.emissions.Cs[0] = init_nnmf[1]
             
         if type(self.dynamics) in exact_m_step_dynamics and self.dynamics.lags == 1:
             # In this case, we can do an exact M-step on the dynamics by passing
@@ -724,7 +777,7 @@ class SLDS(object):
             # Update parameters
             if learning:
                 self._fit_laplace_em_params_update(
-                    variational_posterior, datas, inputs, masks, tags, init_nnmf, emission_optimizer, emission_optimizer_maxiter, alpha, dynamics_dales_constraint, dynamics_diagonal_zero, emission_block_diagonal,
+                    variational_posterior, datas, inputs, masks, tags,  emission_optimizer, emission_optimizer_maxiter, alpha, dynamics_dales_constraint, dynamics_diagonal_zero, emission_block_diagonal,
                     emission_positive,)
 
             elbos.append(self._laplace_em_elbo(
@@ -806,12 +859,19 @@ class SLDS(object):
                             format(method, _fitting_methods.keys()))
 
         # Initialize the model parameters
-        if initialize:
+        if initialize and init_nnmf is None:
             self.initialize(datas, inputs, masks, tags,
                             verbose=verbose,
                             discrete_state_init_method=discrete_state_init_method,
                             num_init_iters=num_init_iters,
-                            num_init_restarts=num_init_restarts)
+                            num_init_restarts=num_init_restarts,)
+        
+        if init_nnmf is not None:
+            self.initialize_with_nnmf(init_nnmf, datas, inputs, masks, tags,
+                            verbose=verbose,
+                            discrete_state_init_method=discrete_state_init_method,
+                            num_init_iters=num_init_iters,
+                            num_init_restarts=num_init_restarts,)
 
         # Initialize the variational posterior
         variational_posterior_kwargs = variational_posterior_kwargs or {}
@@ -819,7 +879,6 @@ class SLDS(object):
             variational_posterior, datas, inputs, masks, tags, method, **variational_posterior_kwargs)
 
         # added dynamics_kwargs to contain information about any constraints on the dynamics matrix, such as if columns should obey dale's law (dynamics_dales_constraint contains fraction of positive columns) and if the diagonal should be zero (dynamics_diagonal_zero)
-
         # added emission_kwargs to impose block-sparse structure / positivity on the emission matrix (emission_block_diagonal contains fraction of nonzero blocks column wise)
 
         dynamics_kwargs = dynamics_kwargs or {}
