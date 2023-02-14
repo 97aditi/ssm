@@ -613,6 +613,7 @@ class SLDS(object):
         ]
 
         if init_nnmf is not None:
+            self.dynamics.As[0] = init_nnmf[0]
             self.dynamics.A = init_nnmf[0]
             self.emissions.Cs[0] = init_nnmf[1]
             

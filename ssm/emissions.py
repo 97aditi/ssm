@@ -429,7 +429,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                 Xs, ys,
                 prior_ExxT=1e-4 * np.eye(self.D + self.M + 1),
                 prior_ExyT=np.zeros((self.D + self.M + 1, self.N)), block_diagonal=block_diagonal,
-                positive=positive)
+                positive=positive, initial_C=self.Cs[0])
             self.Cs = CF[None, :, :self.D]
             self.Fs = CF[None, :, self.D:]
             self.ds = d[None, :]
