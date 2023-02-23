@@ -204,11 +204,7 @@ class SLDS(object):
         self.dynamics = copy.deepcopy(best_arhmm.observations)
 
         
-    def initialize_with_nnmf(self, init_nnmf, datas, inputs=None, masks=None, tags=None,
-                   verbose=0,
-                   num_init_iters=50,
-                   discrete_state_init_method="random",
-                   num_init_restarts=1,):
+    def initialize_with_nnmf(self, init_nnmf, datas, inputs=None, masks=None, tags=None,):
 
         # currently only valid for gaussian emissions
         assert isinstance(self.emissions, emssn.GaussianEmissions), "Currently only valid for Gaussian emissions"
@@ -257,9 +253,6 @@ class SLDS(object):
         var = np.var(noise, axis=0)
         # set the variance of the dynamics model
         self.dynamics._sqrt_Sigmas = np.array([np.diag(np.sqrt(var))])
-
-        print(self.init_state_distn.params)
-        print(self.transitions.params)
 
     def permute(self, perm):
         """
@@ -695,7 +688,7 @@ class SLDS(object):
                               datas, inputs, masks, tags,
                               optimizer=emission_optimizer,
                               maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
-                              emission_positive=emission_positive)
+                              dynamics_dales_constraint = dynamics_dales_constraint,emission_positive=emission_positive)
         self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
 
     def _laplace_em_elbo(self,
@@ -867,11 +860,7 @@ class SLDS(object):
                             num_init_restarts=num_init_restarts,)
         
         if init_nnmf is not None:
-            self.initialize_with_nnmf(init_nnmf, datas, inputs, masks, tags,
-                            verbose=verbose,
-                            discrete_state_init_method=discrete_state_init_method,
-                            num_init_iters=num_init_iters,
-                            num_init_restarts=num_init_restarts,)
+            self.initialize_with_nnmf(init_nnmf, datas, inputs, masks, tags,)
 
         # Initialize the variational posterior
         variational_posterior_kwargs = variational_posterior_kwargs or {}

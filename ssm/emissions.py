@@ -423,13 +423,15 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
 
         block_diagonal = kwargs.get('emission_block_diagonal', False)
         positive = kwargs.get('emission_positive', False)
+        dynamics_dales_constraint = kwargs.get('dynamics_dales_constraint', False)
+
         if self.single_subspace and all([np.all(mask) for mask in masks]):
             # Return exact m-step updates for C, F, d, and inv_etas
             CF, d, Sigma = fit_linear_regression(
                 Xs, ys,
                 prior_ExxT=1e-4 * np.eye(self.D + self.M + 1),
                 prior_ExyT=np.zeros((self.D + self.M + 1, self.N)), block_diagonal=block_diagonal,
-                positive=positive, initial_C=self.Cs[0])
+                dynamics_dales_constraint = dynamics_dales_constraint, positive=positive, initial_C=self.Cs[0])
             self.Cs = CF[None, :, :self.D]
             self.Fs = CF[None, :, self.D:]
             self.ds = d[None, :]

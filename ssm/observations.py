@@ -1161,9 +1161,9 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 # modifying this to cvxpy so as to put dale's law
                 W = cp.Variable((D*lags+1, D))
                 # initialize W to the dynamics matrix
-                W_inital = np.zeros((D*lags+1, D))
-                W_inital[:D*lags,:D] = self.As[k].T
-                W.value = W_inital
+                # W_inital = np.zeros((D*lags+1, D))
+                # W_inital[:D*lags,:D] = self.As[k].T
+                # W.value = W_inital
 
                 # put dales law constraints on A
                 # currently only works for lags==1
@@ -1177,10 +1177,10 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
      
                 # add a positivity constraint on W
                 constraints = [W[:D*lags,:D]>=0]
-                objective = cp.Minimize(cp.norm(ExuyTs[k] + self.h0[k] - (ExuxuTs[k] + self.J0[k])@(sign_mat@W), 'fro'))
+                objective = cp.Minimize(cp.norm((ExuyTs[k] + self.h0[k]) - (ExuxuTs[k] + self.J0[k])@(sign_mat@W), 'fro'))
                 # solve the problem
                 prob = cp.Problem(objective, constraints)
-                prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True)
+                prob.solve(solver = cp.MOSEK, verbose = False,)
                 Wk = (W.value.T)@sign_mat
     
             else:
