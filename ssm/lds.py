@@ -9,7 +9,7 @@ from autograd import value_and_grad, grad
 from ssm.optimizers import adam_step, rmsprop_step, sgd_step, lbfgs, \
     convex_combination, newtons_method_block_tridiag_hessian
 from ssm.primitives import hmm_normalizer
-from ssm.messages import hmm_expected_states, viterbi
+from ssm.messages import hmm_expected_states, viterbi, kalman_filter
 from ssm.util import ensure_args_are_lists, \
     ensure_slds_args_not_none, ensure_variational_args_are_lists, ssm_pbar
 
@@ -677,19 +677,28 @@ class SLDS(object):
         # Update emissions params. This is always approximate (at least for now).
    
         if emission_block_diagonal>0:
-            # only allowed for gaussian emissions or gaussian orthogonal emissions
+            # only allowed for gaussian emissions 
             assert isinstance(self.emissions, emssn.GaussianEmissions), "emission_block_diagonal only allowed for GaussianEmissions"
         if emission_positive>0:
-            # only allowed for gaussian emissions or gaussian orthogonal emissions
+            # only allowed for gaussian emissions 
             assert isinstance(self.emissions, emssn.GaussianEmissions), "emission_positive only allowed for GaussianEmissions"
 
-        curr_prms = copy.deepcopy(self.emissions.params)
-        self.emissions.m_step(discrete_expectations, continuous_samples,
-                              datas, inputs, masks, tags,
-                              optimizer=emission_optimizer,
-                              maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
-                              dynamics_dales_constraint = dynamics_dales_constraint,emission_positive=emission_positive)
-        self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
+        if isinstance(self.emissions, emssn.GaussianEmissions) and self.K==1:
+            continuous_expectations = variational_posterior.continuous_expectations
+            self.emissions.m_step(discrete_expectations, 
+                                continuous_expectations,
+                                datas, inputs, masks, tags,
+                                optimizer=emission_optimizer,
+                                maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
+                                dynamics_dales_constraint = dynamics_dales_constraint,emission_positive=emission_positive)
+        else:
+            curr_prms = copy.deepcopy(self.emissions.params)
+            self.emissions.m_step(discrete_expectations, continuous_samples,
+                                datas, inputs, masks, tags,
+                                optimizer=emission_optimizer,
+                                maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
+                                dynamics_dales_constraint = dynamics_dales_constraint,emission_positive=emission_positive)
+            self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
 
     def _laplace_em_elbo(self,
                          variational_posterior,
@@ -725,8 +734,78 @@ class SLDS(object):
                     exp_log_joint += np.sum(Ezzp1 * log_Ps)
                     exp_log_joint += np.sum(Ez * log_likes)
             return exp_log_joint / n_samples
+        
+        def estimate_complete_data_log_likelihood():
+            """ Estimate the complete data log likelihood for Gaussian LDS"""
+            assert isinstance(self.dynamics, obs.AutoRegressiveObservations), "only implemented for Gaussian LDS"
+            assert isinstance(self.emissions, emssn.GaussianEmissions), "only implemented for Gaussian LDS"
+            assert self.K==1, "only implemented for K=1"
+            assert self.M==0, "only implemented for M=1" 
+            # TODO: implement for M>0
 
-        return estimate_expected_log_joint(n_samples) + variational_posterior.entropy()
+            # get the current model parameters
+            As, bs, _, _ = self.dynamics.params
+            Cs, _, ds, inv_etas = self.emissions.params
+
+            # append the bias to the dynamics
+            A = np.concatenate((As[0], bs[0][:,None]), axis=1)
+            C = np.concatenate((Cs[0], ds[0][:,None]), axis=1)
+
+            # obtain covariances and their inverses
+            Q = self.dynamics.Sigmas[0]
+            R = np.diag(np.exp(inv_etas[0]))
+            Q_inv = np.linalg.inv(Q)
+            R_inv = np.diag(1/np.exp(inv_etas[0]))
+
+            # first initialize the sufficient statistics for the continuous states
+            M_delta = np.zeros((self.D+1, self.D))
+            Y = np.zeros((self.N, self.N))
+            Y_tilde = np.zeros((self.D+1, self.N))
+            M_2T = np.zeros((self.D, self.D))
+            M_1T = np.zeros((self.D+1, self.D+1))
+            M_1T_1 = np.zeros((self.D+1, self.D+1))
+
+            ll_dynamics = 0
+            ll_observations = 0
+
+            # now ompute them usin smoothed means and covariances
+            continuous_expectations = variational_posterior.continuous_expectations
+            for (_, Ex, smoothed_sigmas, ExxnT), data in zip(continuous_expectations, datas):
+
+                _, Ex, smoothed_sigmas, ExxnT = variational_posterior.continuous_expectations[0]
+                M_delta[:self.D, :self.D] += np.sum(ExxnT, axis=0)
+                M_delta[self.D, :self.D] += np.sum(Ex[1:], axis=0)
+
+                Y += np.sum(np.einsum('ti,tj->tij',data, data), axis=0)
+                Y_tilde[:self.D,:] += np.sum(np.einsum('ti,tj->tij',Ex, data), axis=0)
+                Y_tilde[self.D,:] += np.sum(data, axis=0)
+            
+                mumuT = np.einsum('ti,tj->tij',Ex, Ex) + smoothed_sigmas
+                M_2T += np.sum(mumuT[1:], axis=0)
+                M_1T_1[:self.D,:self.D] += np.sum(mumuT[:-1], axis=0)
+                M_1T_1[self.D,:self.D] += np.sum(Ex[:-1], axis=0)
+                M_1T_1[:self.D,self.D] += np.sum(Ex[:-1], axis=0)
+                M_1T_1[self.D,self.D] += data.shape[0]-1
+
+                M_1T[:self.D,:self.D] += np.sum(mumuT, axis=0)
+                M_1T[self.D,:self.D] += np.sum(Ex, axis=0)
+                M_1T[:self.D,self.D] += np.sum(Ex, axis=0)
+                M_1T[self.D,self.D] += data.shape[0]
+
+                # now compute the log likelihood
+                ll_dynamics += -0.5*np.trace(Q_inv@M_2T) + np.trace(Q_inv@A@M_delta) -0.5*np.trace(Q_inv@A@M_1T_1@A.T) \
+                      - 0.5*(data.shape[0]-1)*np.linalg.slogdet(2*np.pi*Q)[1]
+                ll_observations += -0.5*np.trace(R_inv@Y) + np.trace(R_inv@C@Y_tilde) -0.5*np.trace(R_inv@C@M_1T@C.T) \
+                    - 0.5*data.shape[0]*np.linalg.slogdet(2*np.pi*R)[1]
+
+            log_likelihood = ll_observations + ll_dynamics + self.log_prior()
+
+            return log_likelihood 
+
+        if isinstance(self.dynamics, obs.AutoRegressiveObservations) and isinstance(self.emissions, emssn.GaussianEmissions) and self.K==1:
+            return self.log_probability(datas, inputs, masks, tags) 
+        else:
+            return estimate_expected_log_joint(n_samples) + variational_posterior.entropy()
 
     def _fit_laplace_em(self, variational_posterior, datas,
                         inputs=None, masks=None, tags=None,
@@ -1013,8 +1092,28 @@ class LDS(SLDS):
 
     @ensure_args_are_lists
     def log_probability(self, datas, inputs=None, masks=None, tags=None):
-        warnings.warn("Log probability of LDS is not yet implemented.")
-        return np.nan
+        # let's compute the log likelihood of the data using the kalman filter
+        # and then add the log prior
+
+        # get the current model parameters
+        As, bs, Vs, _ = self.dynamics.params
+        Cs, Fs, ds, inv_etas = self.emissions.params
+
+        # obtain covariances and their inverses
+        Qs = self.dynamics.Sigmas
+        Rs = np.diag(np.exp(inv_etas[0]))[None, :, :]
+
+        mu0 = self.dynamics.mu_init[0]
+        S0 = self.dynamics._sqrt_Sigmas_init[0]@self.dynamics._sqrt_Sigmas_init[0].T
+
+        ll = 0
+   
+        for data, input in zip(datas, inputs):
+            ll_this, _, _ = kalman_filter(mu0, S0, As[0], Vs[0], Qs[0], Cs[0], Fs[0], Rs[0], input, data)
+            ll += ll_this
+        ll = ll/len(datas)
+
+        return ll + self.log_prior()
 
     def sample(self, T, input=None, tag=None, prefix=None, with_noise=True):
         (_, x, y) = super().sample(T, input=input, tag=tag, prefix=prefix, with_noise=with_noise)

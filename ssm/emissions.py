@@ -415,10 +415,39 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
     def m_step(self, discrete_expectations, continuous_expectations,
                datas, inputs, masks, tags,
                optimizer="bfgs", maxiter=100, **kwargs):
-
-        Xs = [np.column_stack([x, u]) for x, u in
-              zip(continuous_expectations, inputs)]
+        
         ys = datas
+        if self.M>0:
+            Xs = [np.column_stack([x, u]) for x, u in
+                    zip(continuous_expectations, inputs)]
+            expectations = None
+        else:
+            Xs = [np.column_stack([x, u]) for (_, x, _, _), u in
+                    zip(continuous_expectations, inputs)]
+
+            EyyT = np.zeros((self.N, self.N))
+            ExxT = np.zeros((self.D+1, self.D+1))
+            ExyT = np.zeros((self.D+1, self.N))
+            weight_sum = 0
+
+            weights = [np.ones(y.shape[0]) for y in ys]
+
+            for X, y, weight, (_, Ex, smoothed_sigmas, _) in zip(Xs, ys, weights, continuous_expectations):
+                EyyT += np.sum(np.einsum('ti,tj->tij',y, y) , axis=0)
+                # ExxT
+                mumuT = np.einsum('ti,tj->tij',Ex, Ex) + smoothed_sigmas
+                ExxT[:self.D,:self.D] += np.sum(mumuT, axis=0)
+                ExxT[self.D,:self.D] += np.sum(Ex, axis=0)
+                ExxT[:self.D,self.D] += np.sum(Ex, axis=0)
+                ExxT[self.D,self.D] += Ex.shape[0]
+                # ExyT
+                ExyT[:self.D,:] += np.sum(np.einsum('ti,tj->tij',Ex, y), axis=0)
+                ExyT[self.D,:] += np.sum(y, axis=0)
+                weight_sum += np.sum(weight)
+
+            expectations = [ExxT, ExyT, EyyT, weight_sum]
+
+
         ws = [Ez for (Ez, _, _) in discrete_expectations]
 
         block_diagonal = kwargs.get('emission_block_diagonal', False)
@@ -429,6 +458,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             # Return exact m-step updates for C, F, d, and inv_etas
             CF, d, Sigma = fit_linear_regression(
                 Xs, ys,
+                expectations=expectations, 
                 prior_ExxT=1e-4 * np.eye(self.D + self.M + 1),
                 prior_ExyT=np.zeros((self.D + self.M + 1, self.N)), block_diagonal=block_diagonal,
                 dynamics_dales_constraint = dynamics_dales_constraint, positive=positive, initial_C=self.Cs[0])
