@@ -11,6 +11,7 @@ from ssm.preprocessing import interpolate_data, pca_with_imputation
 from ssm.optimizers import adam, bfgs, rmsprop, sgd, lbfgs
 from ssm.stats import independent_studentst_logpdf, bernoulli_logpdf
 from ssm.regression import fit_linear_regression
+from scipy.stats import invwishart
 
 # Observation models for SLDS
 class Emissions(object):
@@ -36,7 +37,7 @@ class Emissions(object):
     def initialize_from_arhmm(self, arhmm, pca):
         pass
 
-    def log_prior(self):
+    def log_prior(self,):
         return 0
 
     def log_likelihoods(self, data, input, mask, tag, x):
@@ -75,15 +76,13 @@ class Emissions(object):
     def m_step(self, discrete_expectations, continuous_expectations,
                datas, inputs, masks, tags,
                optimizer="bfgs", maxiter=100, emission_block_diagonal = False, 
-               emission_positive = False, **kwargs):
+               **kwargs):
         """
         If M-step in Laplace-EM cannot be done in closed form for the emissions, default to SGD.
         """
 
         if emission_block_diagonal>0:
             raise ValueError("Block diagonal emissions not implemented for this Emissions class.")
-        if emission_positive>0:
-            raise ValueError("Positive emissions not implemented for this Emissions class.")
 
         optimizer = dict(adam=adam, bfgs=bfgs, lbfgs=lbfgs, rmsprop=rmsprop, sgd=sgd)[optimizer]
 
@@ -355,6 +354,9 @@ class _GaussianEmissionsMixin(object):
     def __init__(self, N, K, D, M=0, single_subspace=True, **kwargs):
         super(_GaussianEmissionsMixin, self).__init__(N, K, D, M=M, single_subspace=single_subspace, **kwargs)
         self.inv_etas = -1 + npr.randn(1, N) if single_subspace else npr.randn(K, N)
+        # parameters of the inverse wishart prior on the emission noise
+        self.Psi0 = np.ones(K)
+        self.nu0 = np.ones(K)
 
     @property
     def params(self):
@@ -411,6 +413,13 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                                for C, inv_eta in zip(self.Cs, self.inv_etas)])
             hess = np.sum(Ez[:,:,None,None] * blocks, axis=1)
         return -1 * hess
+    
+    def log_prior(self,):
+        log_prior = 0
+        for k in range(self.K):
+           # compute inverse wishart prior on the emission noise
+            log_prior += log_prior + invwishart.logpdf(np.diag(np.exp(self.inv_etas[k])), self.nu0[k] + self.N+1, self.Psi0[k]*np.eye(self.N))
+        return log_prior
 
     def m_step(self, discrete_expectations, continuous_expectations,
                datas, inputs, masks, tags,
@@ -451,17 +460,27 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         ws = [Ez for (Ez, _, _) in discrete_expectations]
 
         block_diagonal = kwargs.get('emission_block_diagonal', False)
-        positive = kwargs.get('emission_positive', False)
         dynamics_dales_constraint = kwargs.get('dynamics_dales_constraint', False)
+        # infer_sign should be an array containing +1 if the cells is E, -1 if the cells is I and 0 if unknown, when this is not given we assume that cells are sorted already
+        known_sign = np.ones((self.N))
+        known_sign[int(self.N*block_diagonal):] = -1
+        known_sign = known_sign.astype(int)
+        infer_sign = kwargs.get('infer_sign', known_sign)
+        if infer_sign is None:
+            infer_sign = known_sign
 
         if self.single_subspace and all([np.all(mask) for mask in masks]):
             # Return exact m-step updates for C, F, d, and inv_etas
+            initial_C = np.hstack(([self.Cs[0], self.ds[0][:, None]]))
             CF, d, Sigma = fit_linear_regression(
                 Xs, ys,
                 expectations=expectations, 
+                Psi0=self.Psi0[0], nu0=self.nu0[0],
                 prior_ExxT=1e-4 * np.eye(self.D + self.M + 1),
                 prior_ExyT=np.zeros((self.D + self.M + 1, self.N)), block_diagonal=block_diagonal,
-                dynamics_dales_constraint = dynamics_dales_constraint, positive=positive, initial_C=self.Cs[0])
+                dynamics_dales_constraint = dynamics_dales_constraint,  
+                infer_sign = infer_sign,
+                initial_C=initial_C)
             self.Cs = CF[None, :, :self.D]
             self.Fs = CF[None, :, self.D:]
             self.ds = d[None, :]
@@ -469,12 +488,11 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         else:
             if block_diagonal:
                 raise ValueError("Block diagonal updates not supported for non-single-subspace models") 
-            if positive:
-                raise ValueError("Positive updates not supported for non-single-subspace models")
             Cs, Fs, ds, inv_etas = [], [], [], []
             for k in range(self.K):
                 CF, d, Sigma = fit_linear_regression(
                     Xs, ys, weights=[w[:, k] for w in ws],
+                    Psi0=self.Psi0[k], nu0=self.nu0[k],
                     prior_ExxT=1e-4 * np.eye(self.D + self.M + 1),
                     prior_ExyT=np.zeros((self.D + self.M + 1, self.N)))
                 Cs.append(CF[:, :self.D])

@@ -15,6 +15,7 @@ from ssm.preprocessing import interpolate_data
 from ssm.cstats import robust_ar_statistics
 from ssm.optimizers import adam, bfgs, rmsprop, sgd, lbfgs
 import ssm.stats as stats
+from scipy.stats import invwishart
 import cvxpy as cp
 
 
@@ -63,7 +64,7 @@ class Observations(object):
         # Set the variances all at once to use the setter
         self.m_step(expectations, datas, inputs, masks, tags)
 
-    def log_prior(self):
+    def log_prior(self,):
         return 0
 
     def log_likelihoods(self, data, input, mask, tag):
@@ -999,6 +1000,22 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         super(AutoRegressiveObservations, self).permute(perm)
         self._sqrt_Sigmas = self._sqrt_Sigmas[perm]
 
+    def log_prior(self,):
+        log_prior = 0
+        for k in range(self.K):
+            # conctenate A, V, b
+            if self.M>0:
+                A = np.hstack((self.As[k], self.Vs[k], self.bs[k][:, None]))
+            else:
+                A = np.hstack((self.As[k], self.bs[k][:, None]))
+            # invert J0
+            inv_J = np.diag(1/np.diag(self.J0[k]))
+            mu = inv_J@self.h0[k]
+            for i in range(self.D):
+                log_prior += stats.multivariate_normal_logpdf(A[i].ravel(), mu[:,i].ravel(), inv_J)
+            log_prior += invwishart.logpdf(self.Sigmas[k], self.nu0+self.D+1, self.Psi0)
+        return log_prior
+
     def log_likelihoods(self, data, input, mask, tag=None):
         assert np.all(mask), "Cannot compute likelihood of autoregressive obsevations with missing data."
         L = self.lags
@@ -1145,7 +1162,6 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
 
         # check if there are constraints on the dynamics
         dynamics_dales_constraint = kwargs.get('dynamics_dales_constraint', False)
-        dynamics_diagonal_zero = kwargs.get('dynamics_diagonal_zero', False)
 
         for k in range(K):
             if dynamics_dales_constraint>0:
@@ -1161,9 +1177,10 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 # modifying this to cvxpy so as to put dale's law
                 W = cp.Variable((D*lags+1, D))
                 # initialize W to the dynamics matrix
-                # W_inital = np.zeros((D*lags+1, D))
-                # W_inital[:D*lags,:D] = self.As[k].T
-                # W.value = W_inital
+                W_inital = np.zeros((D*lags+1, D))
+                W_inital[:D*lags,:D] = self.As[k].T
+                W_inital[-1] = self.bs[k]
+                W.value = W_inital
 
                 # put dales law constraints on A
                 # currently only works for lags==1
@@ -1180,7 +1197,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 objective = cp.Minimize(cp.norm((ExuyTs[k] + self.h0[k]) - (ExuxuTs[k] + self.J0[k])@(sign_mat@W), 'fro'))
                 # solve the problem
                 prob = cp.Problem(objective, constraints)
-                prob.solve(solver = cp.MOSEK, verbose = False,)
+                prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True)
                 Wk = (W.value.T)@sign_mat
     
             else:
