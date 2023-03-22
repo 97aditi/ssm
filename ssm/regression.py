@@ -140,8 +140,8 @@ def create_expectation_blocks(ExxT, ExyT, fit_intercept, infer_sign, dynamics_da
     unknown_cells = np.where(infer_sign == 0)[0].astype(int)
 
     # compute expectations separately for excitatory and inhibitory latent blocks
-    ExxT_exc = ExxT[:int(dynamics_dales_constraint*p), :]
-    ExxT_inh = ExxT[int(dynamics_dales_constraint*p):p, :]
+    ExxT_exc = ExxT[:int(dynamics_dales_constraint*p), :int(dynamics_dales_constraint*p)]
+    ExxT_inh = ExxT[int(dynamics_dales_constraint*p):p, int(dynamics_dales_constraint*p):p]
 
     initial_C_exc = initial_C[e_cells, :int(dynamics_dales_constraint*p)]
     initial_C_inh = initial_C[i_cells, int(dynamics_dales_constraint*p):p]
@@ -151,8 +151,8 @@ def create_expectation_blocks(ExxT, ExyT, fit_intercept, infer_sign, dynamics_da
 
     # append the covariance of the intercept term
     if fit_intercept:
-        ExxT_exc = np.vstack((ExxT_exc, ExxT[-1].reshape(1, -1)))
-        ExxT_inh = np.vstack((ExxT_inh, ExxT[-1, :].reshape(1, -1)))
+        ExxT_exc = np.vstack((ExxT_exc, ExxT[-1,:int(dynamics_dales_constraint*p)].reshape(1, -1)))
+        ExxT_inh = np.vstack((ExxT_inh, ExxT[-1, int(dynamics_dales_constraint*p):p].reshape(1, -1)))
         # get the initial C matrix for the excitatory and inhibitory blocks  
         initial_C_exc = np.hstack((initial_C_exc, initial_C[e_cells, -1].reshape(-1, 1)))
         initial_C_inh = np.hstack((initial_C_inh, initial_C[i_cells, -1].reshape(-1, 1)))
@@ -161,12 +161,12 @@ def create_expectation_blocks(ExxT, ExyT, fit_intercept, infer_sign, dynamics_da
             initial_C_unknown_exc = np.hstack((initial_C_unknown_exc, initial_C[unknown_cells, -1].reshape(-1, 1)))
             initial_C_unknown_inh = np.hstack((initial_C_unknown_inh, initial_C[unknown_cells, -1].reshape(-1, 1)))
             
-    ExyT_exc = ExyT[:, e_cells]
-    ExyT_inh = ExyT[:, i_cells]
+    ExyT_exc = ExyT[:int(dynamics_dales_constraint*p), e_cells]
+    ExyT_inh = ExyT[int(dynamics_dales_constraint*p):p, i_cells]
     # if unknown cells are present
     if len(unknown_cells) > 0:
-        ExyT_unknown_exc = ExyT[:, unknown_cells]
-        ExyT_unknown_inh = ExyT[:, unknown_cells]
+        ExyT_unknown_exc = ExyT[:int(dynamics_dales_constraint*p), unknown_cells]
+        ExyT_unknown_inh = ExyT[int(dynamics_dales_constraint*p):p, unknown_cells]
 
     # concatenate the excitatory and inhibitory blocks 
     ExxT_block = [ExxT_exc, ExxT_inh]
@@ -297,10 +297,10 @@ def fit_linear_regression(Xs, ys,
         if len(unknown_cells)  > 0:
             W_full[unknown_cells, :] = W_unknown
         # append the intercept term
-
         if fit_intercept:
             W_full[e_cells, -1] = W_exc[:, -1]
             W_full[i_cells, -1] = W_inh[:, -1]
+
         
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T
