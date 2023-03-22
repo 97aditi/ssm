@@ -697,7 +697,7 @@ class SLDS(object):
                                 optimizer=emission_optimizer,
                                 maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
                                 dynamics_dales_constraint = dynamics_dales_constraint,)
-            self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
+            # self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
 
     def _laplace_em_elbo(self,
                          variational_posterior,
@@ -732,7 +732,7 @@ class SLDS(object):
                     exp_log_joint += np.sum(Ez[0] * log_pi0)
                     exp_log_joint += np.sum(Ezzp1 * log_Ps)
                     exp_log_joint += np.sum(Ez * log_likes)
-            return exp_log_joint / (n_samples)
+            return exp_log_joint / n_samples
         
         def estimate_complete_data_log_likelihood():
             """ Estimate the complete data log likelihood for Gaussian LDS"""
@@ -756,10 +756,11 @@ class SLDS(object):
             Q_inv = np.linalg.inv(Q)
             R_inv = np.diag(1/np.exp(inv_etas[0]))
 
+
             ll_dynamics = 0
             ll_observations = 0
 
-            # now compute them using smoothed means and covariances
+            # now ompute them usin smoothed means and covariances
             continuous_expectations = variational_posterior.continuous_expectations
             for (_, Ex, smoothed_sigmas, ExxnT), data in zip(continuous_expectations, datas):
 
@@ -779,7 +780,7 @@ class SLDS(object):
                 Y_tilde[self.D,:] = np.sum(data, axis=0)
             
                 mumuT = np.einsum('ti,tj->tij',Ex, Ex) + smoothed_sigmas
-                M_2T = np.sum(mumuT[1:], axis=0)
+                M_2T += np.sum(mumuT[1:], axis=0)
                 M_1T_1[:self.D,:self.D] = np.sum(mumuT[:-1], axis=0)
                 M_1T_1[self.D,:self.D] = np.sum(Ex[:-1], axis=0)
                 M_1T_1[:self.D,self.D] = np.sum(Ex[:-1], axis=0)
@@ -1103,10 +1104,12 @@ class LDS(SLDS):
         S0 = self.dynamics.Sigmas_init[0]
 
         ll = 0
+        # TODO: not accounting for dynamic bias bs
         for data, input in zip(datas, inputs):
             # accounting for observation bias by subtracting ds[0]
             ll_this, _, _ = kalman_filter(mu0, S0, As[0], Vs[0], Q, Cs[0], Fs[0], R, input, data-ds[0])
             ll += ll_this
+        ll = ll/len(datas)
         
         return ll + self.log_prior()
 
