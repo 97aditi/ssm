@@ -1109,7 +1109,6 @@ class LDS(SLDS):
             # accounting for observation bias by subtracting ds[0]
             ll_this, _, _ = kalman_filter(mu0, S0, As[0], Vs[0], Q, Cs[0], Fs[0], R, input, data-ds[0])
             ll += ll_this
-        ll = ll/len(datas)
         
         return ll + self.log_prior()
 
