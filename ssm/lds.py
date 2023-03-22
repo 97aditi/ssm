@@ -697,7 +697,7 @@ class SLDS(object):
                                 optimizer=emission_optimizer,
                                 maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
                                 dynamics_dales_constraint = dynamics_dales_constraint,)
-            # self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
+            self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
 
     def _laplace_em_elbo(self,
                          variational_posterior,
@@ -1091,6 +1091,12 @@ class LDS(SLDS):
     def log_probability(self, datas, inputs=None, masks=None, tags=None):
         # let's compute the log likelihood of the data using the kalman filter
         # and then add the log prior
+        ll = self.log_likelihood(datas, inputs=inputs, masks=masks, tags=tags)
+        return ll + self.log_prior()
+
+    @ensure_args_are_lists
+    def log_likelihood(self, datas, inputs=None, masks=None, tags=None):
+        # let's compute the log likelihood of the data 
 
         # get the current model parameters
         As, bs, Vs, _ = self.dynamics.params
@@ -1110,7 +1116,7 @@ class LDS(SLDS):
             ll_this, _, _ = kalman_filter(mu0, S0, As[0], Vs[0], Q, Cs[0], Fs[0], R, input, data-ds[0])
             ll += ll_this
         
-        return ll + self.log_prior()
+        return ll 
 
     def sample(self, T, input=None, tag=None, prefix=None, with_noise=True):
         (_, x, y) = super().sample(T, input=input, tag=tag, prefix=prefix, with_noise=with_noise)
