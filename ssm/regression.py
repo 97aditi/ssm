@@ -75,7 +75,7 @@ def solve_regression_for_unknown_cells(ExxT_block, ExyT_block, fit_intercept, in
     # let's first get the number of unknown cells
     n_unknown_cells = initial_C_block[0].shape[0]
     # we want to learn a vector for each cell
-    C_unknown = np.zeros((n_unknown_cells, ExxT_block[0].shape[1]))
+    C_unknown = np.zeros((n_unknown_cells, ExxT_block[0].shape[1]+ExxT_block[1].shape[1]+1))
     # let's store the signs of the cells
     signs = np.zeros((n_unknown_cells, 1))
 
