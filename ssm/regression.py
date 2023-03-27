@@ -320,7 +320,6 @@ def fit_linear_regression(Xs, ys,
     # Compute expected error for covariance matrix estimate
     # E[(y - Ax)(y - Ax)^T]
     expected_err = EyyT - W_full @ ExyT - ExyT.T @ W_full.T + W_full @ ExxT @ W_full.T
-
     nu = nu0 + weight_sum
 
     # Get MAP estimate of posterior covariance
