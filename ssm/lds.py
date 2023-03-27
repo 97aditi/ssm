@@ -632,6 +632,9 @@ class SLDS(object):
                                       dynamics_dales_constraint=False,
                                       emission_block_diagonal=False,
                                       infer_sign = None,):
+        
+        # force Fs to be 0
+        self.emissions.Fs = np.zeros_like(self.emissions.Fs)
 
         # Compute necessary expectations either analytically or via samples
         continuous_samples = variational_posterior.sample_continuous_states()
@@ -678,7 +681,7 @@ class SLDS(object):
             # only allowed for gaussian emissions 
             assert isinstance(self.emissions, emssn.GaussianEmissions), "emission_block_diagonal only allowed for GaussianEmissions"
 
-        if isinstance(self.emissions, emssn.GaussianEmissions) and self.K==1:
+        if isinstance(self.emissions, emssn.GaussianEmissions) and self.K==1 and self.M==0:
             continuous_expectations = variational_posterior.continuous_expectations
             curr_prms = copy.deepcopy(self.emissions.params)
             self.emissions.m_step(discrete_expectations, 
@@ -697,6 +700,8 @@ class SLDS(object):
                                 optimizer=emission_optimizer,
                                 maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
                                 dynamics_dales_constraint = dynamics_dales_constraint,)
+            # force Fs to be 0
+            self.emissions.Fs = np.zeros_like(self.emissions.Fs)
             self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
 
     def _laplace_em_elbo(self,
