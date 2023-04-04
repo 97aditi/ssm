@@ -764,37 +764,36 @@ class SLDS(object):
             continuous_expectations = variational_posterior.continuous_expectations
             for (_, Ex, smoothed_sigmas, ExxnT), data in zip(continuous_expectations, datas):
 
-                # first initialize the sufficient statistics for the continuous states
-                M_delta = np.zeros((self.D+1, self.D))
-                Y = np.zeros((self.N, self.N))
-                Y_tilde = np.zeros((self.D+1, self.N))
-                M_2T = np.zeros((self.D, self.D))
-                M_1T = np.zeros((self.D+1, self.D+1))
-                M_1T_1 = np.zeros((self.D+1, self.D+1))
+                # compute the sufficient statistics for the continuous states
+                ExxnT_intercept = np.zeros((self.D+1, self.D))
+                ExxnT_intercept[:self.D, :self.D] = np.sum(ExxnT, axis=0)
+                ExxnT_intercept[self.D, :self.D] = np.sum(Ex[1:], axis=0)
 
-                M_delta[:self.D, :self.D] = np.sum(ExxnT, axis=0)
-                M_delta[self.D, :self.D] = np.sum(Ex[1:], axis=0)
+                ExyT_intercept = np.zeros((self.D+1, self.N))
+                ExyT_intercept[:self.D,:] = np.sum(np.einsum('ti,tj->tij',Ex, data), axis=0)
+                ExyT_intercept[self.D,:] = np.sum(data, axis=0)
 
-                Y = np.sum(np.einsum('ti,tj->tij',data, data), axis=0)
-                Y_tilde[:self.D,:] = np.sum(np.einsum('ti,tj->tij',Ex, data), axis=0)
-                Y_tilde[self.D,:] = np.sum(data, axis=0)
-            
+                EyyT = np.sum(np.einsum('ti,tj->tij',data, data), axis=0)
+                
                 mumuT = np.einsum('ti,tj->tij',Ex, Ex) + smoothed_sigmas
-                M_2T += np.sum(mumuT[1:], axis=0)
-                M_1T_1[:self.D,:self.D] = np.sum(mumuT[:-1], axis=0)
-                M_1T_1[self.D,:self.D] = np.sum(Ex[:-1], axis=0)
-                M_1T_1[:self.D,self.D] = np.sum(Ex[:-1], axis=0)
-                M_1T_1[self.D,self.D] = data.shape[0]-1
+                ExxT_2T = np.sum(mumuT[1:], axis=0)
 
-                M_1T[:self.D,:self.D] = np.sum(mumuT, axis=0)
-                M_1T[self.D,:self.D] = np.sum(Ex, axis=0)
-                M_1T[:self.D,self.D] = np.sum(Ex, axis=0)
-                M_1T[self.D,self.D] = data.shape[0]
+                ExxT_intercept_1T_1 = np.zeros((self.D+1, self.D+1))
+                ExxT_intercept_1T_1[:self.D,:self.D] = np.sum(mumuT[:-1], axis=0)
+                ExxT_intercept_1T_1[self.D,:self.D] = np.sum(Ex[:-1], axis=0)
+                ExxT_intercept_1T_1[:self.D,self.D] = np.sum(Ex[:-1], axis=0)
+                ExxT_intercept_1T_1[self.D,self.D] = data.shape[0]-1
+
+                ExxT_intercept = np.zeros((self.D+1, self.D+1))
+                ExxT_intercept[:self.D,:self.D] = np.sum(mumuT, axis=0)
+                ExxT_intercept[self.D,:self.D] = np.sum(Ex, axis=0)
+                ExxT_intercept[:self.D,self.D] = np.sum(Ex, axis=0)
+                ExxT_intercept[self.D,self.D] = data.shape[0]
 
                 # now compute the log likelihood
-                ll_dynamics += -0.5*np.trace(Q_inv@M_2T) + np.trace(Q_inv@A@M_delta) -0.5*np.trace(Q_inv@A@M_1T_1@A.T) \
+                ll_dynamics += -0.5*np.trace(Q_inv@ExxT_2T) + np.trace(Q_inv@A@ExxnT_intercept) -0.5*np.trace(Q_inv@A@ExxT_intercept_1T_1@A.T) \
                       - 0.5*(data.shape[0]-1)*np.linalg.slogdet(2*np.pi*Q)[1]
-                ll_observations += -0.5*np.trace(R_inv@Y) + np.trace(R_inv@C@Y_tilde) -0.5*np.trace(R_inv@C@M_1T@C.T) \
+                ll_observations += -0.5*np.trace(R_inv@EyyT) + np.trace(R_inv@C@ExyT_intercept) -0.5*np.trace(R_inv@C@ExxT_intercept@C.T) \
                     - 0.5*data.shape[0]*np.linalg.slogdet(2*np.pi*R)[1]
 
             log_likelihood = ll_observations + ll_dynamics + self.log_prior()
@@ -843,6 +842,10 @@ class SLDS(object):
             self._fit_laplace_em_continuous_state_update(
                 variational_posterior, datas, inputs, masks, tags,
                 continuous_optimizer, continuous_tolerance, continuous_maxiter)       
+
+            if itr == 0:
+                print(self._laplace_em_elbo(
+                variational_posterior, datas, inputs, masks, tags, n_samples=num_samples))
 
             # Update parameters
             if learning:
@@ -936,8 +939,24 @@ class SLDS(object):
                             num_init_restarts=num_init_restarts,)
         
         if init_nnmf is not None:
-            self.initialize_with_nnmf(init_nnmf, datas, inputs, masks, tags,)
+            print("initializing model parameters")
+            if len(init_nnmf) == 2:
+                self.initialize_with_nnmf(init_nnmf, datas, inputs, masks, tags,)
+            else:
+                # change this to pass other params also
+                A, b, C, d, Q, R, mu_init = init_nnmf
+                # dynamics parameters
+                self.dynamics._As = A[np.newaxis, :, :]
+                self.dynamics.bs = b[np.newaxis, :]
+                self.dynamics._sqrt_Sigmas = np.linalg.cholesky(Q)[np.newaxis, :, :]
+                self.dynamics.mu_init = mu_init[np.newaxis, :]
+                self.dynamics._sqrt_Sigmas_init = np.linalg.cholesky(Q)[np.newaxis, :, :]
 
+                # emission parameters
+                self.emissions._Cs = C[np.newaxis, :, :]
+                self.emissions.ds = d[np.newaxis, :]
+                self.emissions.inv_etas = np.log(np.diag(R))[np.newaxis, :]
+                
         # Initialize the variational posterior
         variational_posterior_kwargs = variational_posterior_kwargs or {}
         posterior = self._make_variational_posterior(
@@ -948,6 +967,13 @@ class SLDS(object):
 
         dynamics_kwargs = dynamics_kwargs or {}
         emission_kwargs = emission_kwargs or {}
+
+        if init_nnmf is not None:
+            print("initializing posterior")
+            # run an E step to initialize the posterior
+            _ = _fitting_methods[method](
+            posterior, datas, inputs, masks, tags, verbose,
+            learning=False, **dynamics_kwargs, **emission_kwargs, num_iters=1, num_samples=2)
 
         elbos = _fitting_methods[method](
             posterior, datas, inputs, masks, tags, verbose,
