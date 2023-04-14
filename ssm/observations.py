@@ -1164,7 +1164,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         dynamics_dales_constraint = kwargs.get('dynamics_dales_constraint', False)
 
         for k in range(K):
-            if dynamics_dales_constraint>0:
+            if dynamics_dales_constraint>0:      
                 # this contains the fraction of positive columns in the dynamics matrix
 
                 # TODO: 
@@ -1174,34 +1174,47 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 assert M==0, "Only M==0 is supported for now"
 
                 """ Here we used cvxpy to solve the linear regression problem"""
+
                 # modifying this to cvxpy so as to put dale's law
-                W = cp.Variable((D*lags+1, D))
+                W = cp.Variable((D,(D*lags+1)))
                 # initialize W to the dynamics matrix
-                W_inital = np.zeros((D*lags+1, D))
-                W_inital[:D*lags,:D] = self.As[k].T
-                W_inital[-1] = self.bs[k]
+                W_inital = np.zeros((D, D*lags+1))
+                W_inital[:D,:D*lags] = self.As[k]
+                W_inital[:,-1] = self.bs[k]
                 W.value = W_inital
 
                 # put dales law constraints on A
                 # currently only works for lags==1
                 assert lags==1, "Only lags==1 is supported for now"
-                positive_cols = int(dynamics_dales_constraint*D)
-                col_signs = np.ones(D*lags+1)
-                for i in range(lags):
-                    col_signs[i*D + positive_cols:(i+1)*D] = -1
-                # this matrix defines the sign of each column
-                sign_mat = np.diag(col_signs)
-     
-                # add a positivity constraint on W
-                constraints = [W[:D*lags,:D]>=0]
-                objective = cp.Minimize(cp.norm((ExuyTs[k] + self.h0[k]) - (ExuxuTs[k] + self.J0[k])@(sign_mat@W), 'fro'))
+                # add constraints on the dynamics vector
+                constraints = []
+                constraints.append(W[:, :int(dynamics_dales_constraint*D)] >= 0)
+                constraints.append(W[:, int(dynamics_dales_constraint*D):D] <= 0)
+                # get the inverse of Sigma
+                Q_inv = np.linalg.inv(self.Sigmas[k])
+                # check if the inverse is correct
+                assert np.allclose(self.Sigmas[k]@Q_inv, np.eye(D)), "Inverse of Sigma failed"
+                # perform a cholesky decomposition
+                L = np.linalg.cholesky(Q_inv)
+                # check if the cholesky decomposition is successful
+                assert np.allclose(L@L.T, Q_inv), "Cholesky decomposition failed"
+                # get matrices in desired forms
+                kron_ExuxuTs = np.kron((ExuxuTs[k]+self.J0[k]).T, np.eye(D))
+                # define the objective function
+                objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs[k]+self.h0[k])))
                 # solve the problem
                 prob = cp.Problem(objective, constraints)
-                prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True)
-                Wk = (W.value.T)@sign_mat
-    
+                prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True,)
+                # check if the problem is solved
+                assert prob.status == 'optimal', "M step for A: Problem not solved"
+                # print the value of the objective function 
+                Wk = W.value
+
+                assert np.all(np.linalg.eigvals(As[k]) < 1), "The dynamics matrix has eigen values greater than 1"
+
             else:
                 Wk = np.linalg.solve(ExuxuTs[k] + self.J0[k], ExuyTs[k] + self.h0[k]).T
+                
             As[k] = Wk[:, :D * lags]
             Vs[k] = Wk[:, D * lags:-1]
             bs[k] = Wk[:, -1]

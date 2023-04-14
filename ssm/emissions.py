@@ -418,7 +418,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         log_prior = 0
         for k in range(self.K):
            # compute inverse wishart prior on the emission noise
-            log_prior += log_prior + invwishart.logpdf(np.diag(np.exp(self.inv_etas[k])), self.nu0[k] + self.N+1, self.Psi0[k]*np.eye(self.N))
+            log_prior += log_prior + invwishart.logpdf(np.diag(np.exp(self.inv_etas[k])), self.nu0[k] + self.N +1, self.Psi0[k]*np.eye(self.N))
         return log_prior
 
     def m_step(self, discrete_expectations, continuous_expectations,
@@ -480,7 +480,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                 prior_ExyT=np.zeros((self.D + self.M + 1, self.N)), block_diagonal=block_diagonal,
                 dynamics_dales_constraint = dynamics_dales_constraint,  
                 infer_sign = infer_sign,
-                initial_C=initial_C)
+                initial_C=initial_C, current_etas=self.inv_etas[0]) 
             self.Cs = CF[None, :, :self.D]
             self.Fs = CF[None, :, self.D:]
             self.ds = d[None, :]

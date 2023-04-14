@@ -666,6 +666,8 @@ class SLDS(object):
             # in the true sufficient statistics for the continuous state.
             kwargs["continuous_expectations"] = variational_posterior.continuous_expectations
             self.dynamics.m_step(**kwargs)
+            # print("after dynamics: " +str(self._laplace_em_elbo(variational_posterior, datas, inputs, masks, tags, n_samples=1)))
+
         else:
             # Otherwise, do an approximate m-step by sampling.
             curr_prms = copy.deepcopy(self.dynamics.params)
@@ -688,8 +690,7 @@ class SLDS(object):
                                 maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
                                 dynamics_dales_constraint = dynamics_dales_constraint,
                                 infer_sign=infer_sign)
-            # # TODO: this might need more tweaking when i am inferring params
-            # self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
+            # print("after emissions: " +str(self._laplace_em_elbo(variational_posterior, datas, inputs, masks, tags, n_samples=1)))
         else:
             curr_prms = copy.deepcopy(self.emissions.params)
             self.emissions.m_step(discrete_expectations, continuous_samples,
@@ -841,11 +842,9 @@ class SLDS(object):
             # 2. Update the continuous state posterior q(x)
             self._fit_laplace_em_continuous_state_update(
                 variational_posterior, datas, inputs, masks, tags,
-                continuous_optimizer, continuous_tolerance, continuous_maxiter)       
+                continuous_optimizer, continuous_tolerance, continuous_maxiter)   
 
-            if itr == 0:
-                print(self._laplace_em_elbo(
-                variational_posterior, datas, inputs, masks, tags, n_samples=num_samples))
+            # print("after E step: " +str(self._laplace_em_elbo(variational_posterior, datas, inputs, masks, tags, n_samples=1)))   
 
             # Update parameters
             if learning:
@@ -946,16 +945,16 @@ class SLDS(object):
                 # change this to pass other params also
                 A, b, C, d, Q, R, mu_init = init_nnmf
                 # dynamics parameters
-                self.dynamics._As = A[np.newaxis, :, :]
-                self.dynamics.bs = b[np.newaxis, :]
-                self.dynamics._sqrt_Sigmas = np.linalg.cholesky(Q)[np.newaxis, :, :]
-                self.dynamics.mu_init = mu_init[np.newaxis, :]
-                self.dynamics._sqrt_Sigmas_init = np.linalg.cholesky(Q)[np.newaxis, :, :]
+                self.dynamics.A = A.copy()
+                self.dynamics.b = b.copy()
+                self.dynamics.Sigmas = Q[np.newaxis, :, :].copy()
+                self.dynamics.mu_init = mu_init[np.newaxis, :].copy()
+                self.dynamics.Sigmas_init = Q[np.newaxis, :, :].copy()
 
                 # emission parameters
-                self.emissions._Cs = C[np.newaxis, :, :]
-                self.emissions.ds = d[np.newaxis, :]
-                self.emissions.inv_etas = np.log(np.diag(R))[np.newaxis, :]
+                self.emissions.Cs = C[np.newaxis, :, :].copy()
+                self.emissions.ds = d[np.newaxis, :].copy()
+                self.emissions.inv_etas = np.log(np.diag(R))[np.newaxis, :].copy()
                 
         # Initialize the variational posterior
         variational_posterior_kwargs = variational_posterior_kwargs or {}
@@ -973,7 +972,7 @@ class SLDS(object):
             # run an E step to initialize the posterior
             _ = _fitting_methods[method](
             posterior, datas, inputs, masks, tags, verbose,
-            learning=False, **dynamics_kwargs, **emission_kwargs, num_iters=1, num_samples=2)
+            learning=False, **dynamics_kwargs, **emission_kwargs, num_iters=1, num_samples=1)
 
         elbos = _fitting_methods[method](
             posterior, datas, inputs, masks, tags, verbose,
