@@ -943,14 +943,13 @@ class SLDS(object):
                 self.initialize_with_nnmf(init_nnmf, datas, inputs, masks, tags,)
             else:
                 # change this to pass other params also
-                A, b, C, d, Q, R, mu_init = init_nnmf
+                A, b, C, d, Q, R, mu_init, Sigma_init = init_nnmf
                 # dynamics parameters
                 self.dynamics.A = A.copy()
                 self.dynamics.b = b.copy()
                 self.dynamics.Sigmas = Q[np.newaxis, :, :].copy()
                 self.dynamics.mu_init = mu_init[np.newaxis, :].copy()
-                self.dynamics.Sigmas_init = Q[np.newaxis, :, :].copy()
-
+                self.dynamics.Sigmas_init = Sigma_init[np.newaxis, :].copy()
                 # emission parameters
                 self.emissions.Cs = C[np.newaxis, :, :].copy()
                 self.emissions.ds = d[np.newaxis, :].copy()

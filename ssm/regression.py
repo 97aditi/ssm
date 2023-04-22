@@ -324,9 +324,18 @@ def fit_linear_regression(Xs, ys,
         if fit_intercept:
             W_full[e_cells, -1] = W_exc[:, -1]
             W_full[i_cells, -1] = W_inh[:, -1]
+
+
+        # # also get covariance for each block separately 
+        # EyyT_block = [EyyT[e_cells, :][:, e_cells], EyyT[i_cells, :][:, i_cells]]
+        # expected_err_exc = EyyT_block[0] - W_exc @ ExyT_block[0] - ExyT_block[0].T @ W_exc.T + W_exc @ ExxT_block[0] @ W_exc.T
+        # expected_err_inh = EyyT_block[1] - W_inh @ ExyT_block[1] - ExyT_block[1].T @ W_inh.T + W_inh @ ExxT_block[1] @ W_inh.T
+        # # create a block diagonal matrix from the excitatory and inhibitory blocks
+        # expected_err = np.zeros((d, d))
+        # expected_err[e_cells, :][:, e_cells] = expected_err_exc
+        # expected_err[i_cells, :][:, i_cells] = expected_err_inh
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T
-
     # Compute expected error for covariance matrix estimate
     # E[(y - Ax)(y - Ax)^T]
     expected_err = EyyT - W_full @ ExyT - ExyT.T @ W_full.T + W_full @ ExxT @ W_full.T
