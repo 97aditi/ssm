@@ -793,6 +793,7 @@ class SLDS(object):
                 # now compute the log likelihood
                 ll_dynamics += -0.5*np.trace(Q_inv@ExxT_2T) + np.trace(Q_inv@A@ExxnT_intercept) -0.5*np.trace(Q_inv@A@ExxT_intercept_1T_1@A.T) \
                       - 0.5*(data.shape[0]-1)*np.linalg.slogdet(2*np.pi*Q)[1]
+                      
                 ll_observations += -0.5*np.trace(R_inv@EyyT) + np.trace(R_inv@C@ExyT_intercept) -0.5*np.trace(R_inv@C@ExxT_intercept@C.T) \
                     - 0.5*data.shape[0]*np.linalg.slogdet(2*np.pi*R)[1]
 

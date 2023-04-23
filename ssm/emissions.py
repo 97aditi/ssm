@@ -376,6 +376,7 @@ class _GaussianEmissionsMixin(object):
     def log_likelihoods(self, data, input, mask, tag, x):
         mus = self.forward(x, input, tag)
         etas = self.inv_etas
+        # TODO: this is wrong, needs to be fixed
         lls = -0.5 * np.linalg.slogdet(2 * np.pi * etas)[1] - 0.5 * (data[:, None, :] - mus) @ np.linalg.inv(etas) @ ((data[:, None, :] - mus).transpose((0, 2, 1)))
         return np.sum(lls * mask[:, None, :], axis=2)
 
