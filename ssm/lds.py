@@ -753,10 +753,9 @@ class SLDS(object):
 
             # obtain covariances and their inverses
             Q = self.dynamics.Sigmas[0]
-            R = np.diag(np.exp(inv_etas[0]))
+            R = inv_etas[0]
             Q_inv = np.linalg.inv(Q)
-            R_inv = np.diag(1/np.exp(inv_etas[0]))
-
+            R_inv = np.linalg.inv(R)
 
             ll_dynamics = 0
             ll_observations = 0
@@ -953,7 +952,7 @@ class SLDS(object):
                 # emission parameters
                 self.emissions.Cs = C[np.newaxis, :, :].copy()
                 self.emissions.ds = d[np.newaxis, :].copy()
-                self.emissions.inv_etas = np.log(np.diag(R))[np.newaxis, :].copy()
+                self.emissions.inv_etas = R[np.newaxis, :].copy()
                 
         # Initialize the variational posterior
         variational_posterior_kwargs = variational_posterior_kwargs or {}
@@ -1128,7 +1127,7 @@ class LDS(SLDS):
 
         # obtain covariances and their inverses
         Q = self.dynamics.Sigmas[0]
-        R = np.diag(np.exp(inv_etas[0]))
+        R = inv_etas[0]
 
         mu0 = self.dynamics.mu_init[0] 
         S0 = self.dynamics.Sigmas_init[0]

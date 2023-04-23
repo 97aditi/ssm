@@ -54,8 +54,8 @@ def solve_regression_for_blocks(ExxT_block, ExyT_block, fit_intercept, initial_C
             constraints.append(W_block[:, :-1]>=0)
         else:
             constraints.append(W_block >= 0)
-        R_inv = np.diag(1/np.exp(eta_block))
-        L = np.diag(1/np.sqrt(np.exp(eta_block)))
+        R_inv = np.linalg.inv(eta_block)
+        L = np.linalg.cholesky(R_inv)
         kron_ExxT = np.kron(ExxT, np.eye(ExyT.shape[1]))
         # add the objective function
         objective = cp.Minimize(cp.quad_form((L.T@W_block).flatten(), kron_ExxT) - 2*cp.trace(R_inv@W_block@ExyT))
@@ -158,7 +158,7 @@ def create_expectation_blocks(ExxT, ExyT, fit_intercept, infer_sign, dynamics_da
         initial_C_unknown_exc = initial_C[unknown_cells, :int(dynamics_dales_constraint*p)]
         initial_C_unknown_inh = initial_C[unknown_cells, int(dynamics_dales_constraint*p):p]
 
-    etas_block = [current_etas[e_cells], current_etas[i_cells]]
+    etas_block = [current_etas[e_cells,:][:,e_cells], current_etas[i_cells,:][:,i_cells]]
 
     ExyT_exc = ExyT[:int(dynamics_dales_constraint*p), e_cells]
     ExyT_inh = ExyT[int(dynamics_dales_constraint*p):p, i_cells]

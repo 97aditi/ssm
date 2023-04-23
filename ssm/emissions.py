@@ -353,7 +353,8 @@ class _NeuralNetworkEmissions(Emissions):
 class _GaussianEmissionsMixin(object):
     def __init__(self, N, K, D, M=0, single_subspace=True, **kwargs):
         super(_GaussianEmissionsMixin, self).__init__(N, K, D, M=M, single_subspace=single_subspace, **kwargs)
-        self.inv_etas = -1 + npr.randn(1, N) if single_subspace else npr.randn(K, N)
+        # self.inv_etas = -1 + npr.randn(1, N) if single_subspace else npr.randn(K, N)
+        self.inv_etas = np.random.randn(K, N, N)
         # parameters of the inverse wishart prior on the emission noise
         self.Psi0 = np.ones(K)
         self.nu0 = np.ones(K)
@@ -374,8 +375,8 @@ class _GaussianEmissionsMixin(object):
 
     def log_likelihoods(self, data, input, mask, tag, x):
         mus = self.forward(x, input, tag)
-        etas = np.exp(self.inv_etas)
-        lls = -0.5 * np.log(2 * np.pi * etas) - 0.5 * (data[:, None, :] - mus)**2 / etas
+        etas = self.inv_etas
+        lls = -0.5 * np.linalg.slogdet(2 * np.pi * etas)[1] - 0.5 * (data[:, None, :] - mus) @ np.linalg.inv(etas) @ ((data[:, None, :] - mus).transpose((0, 2, 1)))
         return np.sum(lls * mask[:, None, :], axis=2)
 
     def invert(self, data, input=None, mask=None, tag=None):
@@ -385,8 +386,8 @@ class _GaussianEmissionsMixin(object):
         T = z.shape[0]
         z = np.zeros_like(z, dtype=int) if self.single_subspace else z
         mus = self.forward(x, input, tag)
-        etas = np.exp(self.inv_etas)
-        return mus[np.arange(T), z, :] + np.sqrt(etas[z]) * npr.randn(T, self.N)
+        etas = self.inv_etas
+        return mus[np.arange(T), z, :] + npr.multivariate_normal(np.zeros(self.D), etas[z], size=T)
 
     def smooth(self, expected_states, variational_mean, data, input=None, mask=None, tag=None):
         mus = self.forward(variational_mean, input, tag)
@@ -400,15 +401,19 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
     def initialize(self, datas, inputs=None, masks=None, tags=None):
         datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
         pca = self._initialize_with_pca(datas, inputs=inputs, masks=masks, tags=tags)
-        self.inv_etas[:,...] = np.log(pca.noise_variance_)
+        # TODO: check if makes sense?
+        self.inv_etas[:,...] = np.diag(pca.noise_variance_)
 
     def neg_hessian_log_emissions_prob(self, data, input, mask, tag, x, Ez):
+        # TODO: check if things need to be changed here?
         # Return (T, D, D) array of blocks for the diagonal of the Hessian
         T, D = data.shape
         if self.single_subspace:
-            block = -1.0 * self.Cs[0].T@np.diag( 1.0 / np.exp(self.inv_etas[0]) )@self.Cs[0]
+            R_inv = np.linalg.inv(self.inv_etas[0])
+            block = -1.0 * self.Cs[0].T@R_inv@self.Cs[0]
             hess = np.tile(block[None,:,:], (T, 1, 1))
         else:
+            # TODO: ideally this should be fixed
             blocks = np.array([-1.0 * C.T@np.diag(1.0/np.exp(inv_eta))@C
                                for C, inv_eta in zip(self.Cs, self.inv_etas)])
             hess = np.sum(Ez[:,:,None,None] * blocks, axis=1)
@@ -418,7 +423,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         log_prior = 0
         for k in range(self.K):
            # compute inverse wishart prior on the emission noise
-            log_prior += log_prior + invwishart.logpdf(np.diag(np.exp(self.inv_etas[k])), self.nu0[k] + self.N +1, self.Psi0[k]*np.eye(self.N))
+            log_prior += log_prior + invwishart.logpdf(self.inv_etas[k], self.nu0[k] + self.N +1, self.Psi0[k]*np.eye(self.N))
         return log_prior
 
     def m_step(self, discrete_expectations, continuous_expectations,
@@ -484,7 +489,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             self.Cs = CF[None, :, :self.D]
             self.Fs = CF[None, :, self.D:]
             self.ds = d[None, :]
-            self.inv_etas = np.log(np.diag(Sigma))[None, :]
+            self.inv_etas = Sigma[None, :]
         else:
             if block_diagonal:
                 raise ValueError("Block diagonal updates not supported for non-single-subspace models") 
@@ -498,7 +503,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                 Cs.append(CF[:, :self.D])
                 Fs.append(CF[:, self.D:])
                 ds.append(d)
-                inv_etas.append(np.log(np.diag(Sigma)))
+                inv_etas.append(Sigma)
             self.Cs = np.array(Cs)
             self.Fs = np.array(Fs)
             self.ds = np.array(ds)
