@@ -4,7 +4,6 @@ import autograd.numpy as np
 import autograd.numpy.random as npr
 from autograd.scipy.special import gammaln
 from autograd import hessian
-import ssm.stats as stats
 
 from ssm.util import ensure_args_are_lists, \
     logistic, logit, softplus, inv_softplus
@@ -375,14 +374,11 @@ class _GaussianEmissionsMixin(object):
             self.inv_etas = self.inv_etas[perm]
 
     def log_likelihoods(self, data, input, mask, tag, x):
-        """ should return an array of size T X K"""
-        if mask is not None and np.any(~mask) and not isinstance(mus, np.ndarray):
-            raise Exception("Current implementation of multivariate_normal_logpdf for masked data"
-                            "does not work with autograd because it writes to an array. ")
-        mus = self.forward(x, input, tag).transpose((1, 0, 2))
+        mus = self.forward(x, input, tag)
         etas = self.inv_etas
-        return np.column_stack([stats.multivariate_normal_logpdf(data, mu, Sigma)
-                               for mu, Sigma in zip(mus, etas)])
+        # TODO: this is wrong, needs to be fixed
+        lls = -0.5 * np.linalg.slogdet(2 * np.pi * etas)[1] - 0.5 * (data[:, None, :] - mus) @ np.linalg.inv(etas) @ ((data[:, None, :] - mus).transpose((0, 2, 1)))
+        return np.sum(lls * mask[:, None, :], axis=2)
 
     def invert(self, data, input=None, mask=None, tag=None):
         return self._invert(data, input=input, mask=mask, tag=tag)
@@ -406,7 +402,8 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
     def initialize(self, datas, inputs=None, masks=None, tags=None):
         datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
         pca = self._initialize_with_pca(datas, inputs=inputs, masks=masks, tags=tags)
-        self.inv_etas[:,...] = pca.noise_variance_ + 1e-4*np.eye(self.N)
+        # TODO: check if makes sense?
+        self.inv_etas[:,...] = np.diag(pca.noise_variance_)
 
     def neg_hessian_log_emissions_prob(self, data, input, mask, tag, x, Ez):
         # TODO: check if things need to be changed here?
@@ -417,7 +414,8 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             block = -1.0 * self.Cs[0].T@R_inv@self.Cs[0]
             hess = np.tile(block[None,:,:], (T, 1, 1))
         else:
-            blocks = np.array([-1.0 * C.T@np.linalg.inv(inv_eta)@C
+            # TODO: ideally this should be fixed
+            blocks = np.array([-1.0 * C.T@np.diag(1.0/np.exp(inv_eta))@C
                                for C, inv_eta in zip(self.Cs, self.inv_etas)])
             hess = np.sum(Ez[:,:,None,None] * blocks, axis=1)
         return -1 * hess
