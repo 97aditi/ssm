@@ -690,7 +690,6 @@ class SLDS(object):
                                 maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
                                 dynamics_dales_constraint = dynamics_dales_constraint,
                                 infer_sign=infer_sign)
-            # print("after emissions: " +str(self._laplace_em_elbo(variational_posterior, datas, inputs, masks, tags, n_samples=1)))
         else:
             curr_prms = copy.deepcopy(self.emissions.params)
             self.emissions.m_step(discrete_expectations, continuous_samples,
@@ -842,8 +841,6 @@ class SLDS(object):
             self._fit_laplace_em_continuous_state_update(
                 variational_posterior, datas, inputs, masks, tags,
                 continuous_optimizer, continuous_tolerance, continuous_maxiter)   
-
-            # print("after E step: " +str(self._laplace_em_elbo(variational_posterior, datas, inputs, masks, tags, n_samples=1)))   
 
             # Update parameters
             if learning:
