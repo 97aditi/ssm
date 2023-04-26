@@ -12,6 +12,7 @@ from ssm.optimizers import adam, bfgs, rmsprop, sgd, lbfgs
 from ssm.stats import independent_studentst_logpdf, bernoulli_logpdf
 from ssm.regression import fit_linear_regression
 from scipy.stats import invwishart
+import ssm.stats as stats
 
 # Observation models for SLDS
 class Emissions(object):
@@ -374,11 +375,18 @@ class _GaussianEmissionsMixin(object):
             self.inv_etas = self.inv_etas[perm]
 
     def log_likelihoods(self, data, input, mask, tag, x):
-        mus = self.forward(x, input, tag)
-        etas = self.inv_etas
-        # TODO: this is wrong, needs to be fixed
-        lls = -0.5 * np.linalg.slogdet(2 * np.pi * etas)[1] - 0.5 * (data[:, None, :] - mus) @ np.linalg.inv(etas) @ ((data[:, None, :] - mus).transpose((0, 2, 1)))
-        return np.sum(lls * mask[:, None, :], axis=2)
+        if mask is not None and np.any(~mask) and not isinstance(mus, np.ndarray):
+            raise Exception("Current implementation of multivariate_normal_logpdf for masked data"
+                            "does not work with autograd because it writes to an array. "
+                            "Use DiagonalGaussian instead if you need to support missing data.")
+
+        mus = self.forward(x, input, tag).reshape((-1, data.shape[0], self.N))
+        Sigmas = self.inv_etas
+        # # TODO: this is wrong, needs to be fixed
+        # lls = -0.5 * np.linalg.slogdet(2 * np.pi * etas)[1] - 0.5 * (data[:, None, :] - mus) @ np.linalg.inv(etas) @ ((data[:, None, :] - mus).transpose((0, 2, 1)))
+        return np.column_stack([stats.multivariate_normal_logpdf(data, mu, Sigma)
+                               for mu, Sigma in zip(mus, Sigmas)])
+        # return np.sum(lls * mask[:, None, :], axis=2)
 
     def invert(self, data, input=None, mask=None, tag=None):
         return self._invert(data, input=input, mask=mask, tag=tag)
