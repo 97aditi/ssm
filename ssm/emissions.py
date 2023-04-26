@@ -411,7 +411,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
         pca = self._initialize_with_pca(datas, inputs=inputs, masks=masks, tags=tags)
         # TODO: check if makes sense?
-        self.inv_etas[:,...] = np.diag(pca.noise_variance_)
+        self.inv_etas[:,...] = pca.noise_variance_ + 1e-4*np.eye(self.N)
 
     def neg_hessian_log_emissions_prob(self, data, input, mask, tag, x, Ez):
         # TODO: check if things need to be changed here?
