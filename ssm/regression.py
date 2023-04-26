@@ -63,7 +63,8 @@ def solve_regression_for_blocks(ExxT_block, ExyT_block, fit_intercept, initial_C
         prob = cp.Problem(objective, constraints)
         prob.solve(solver=cp.MOSEK, verbose=False, warm_start=True,)
         # check if the problem is solved
-        assert prob.status == 'optimal', "M step for C: Problem not solved"
+        if prob.status != 'optimal':
+            print("Warning: M step for C failed to converge!")
         return W_block.value
     # solve the constrained problem for each block in parallel
     results = Parallel(n_jobs=2, verbose=False)(

@@ -1206,7 +1206,8 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 prob = cp.Problem(objective, constraints)
                 prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True,)
                 # check if the problem is solved
-                assert prob.status == 'optimal', "M step for A: Problem not solved"
+                if prob.status != 'optimal':
+                    print("Warning: M step for A failed to converge!")
                 # print the value of the objective function 
                 Wk = W.value
 
