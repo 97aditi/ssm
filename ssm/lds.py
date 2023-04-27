@@ -238,7 +238,7 @@ class SLDS(object):
         # find the variance of each dimension
         var = np.var(noise, axis=0)
         # set the variance of the emission model
-        self.emissions.inv_etas[:,...] = np.log(var)
+        self.emissions.inv_etas[:,...] = np.diag(var) + 1e-5*np.eye(self.N)
 
         # now initialize the dynamics model
         # only valid for k=1
