@@ -42,6 +42,39 @@ model_kwarg_descriptions = dict(
     negative_binomial=dict(r="The \"number of failures\" parameterizing the negative binomial distribution.")
     )
 
+def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_dales_constraint, infer_sign):
+    """ learn the emission matrix C with block-sparse constraints"""
+
+    # let's get the indices of the excitatory and inhibitory cells
+    e_cells = np.where(infer_sign == 1)[0].astype(int)
+    i_cells = np.where(infer_sign == -1)[0].astype(int)
+    # get the dimension of the latent space 
+    if fit_intercept:
+        p = ExxT.shape[0] - 1
+    else:
+        p = ExxT.shape[0]
+    d_e = int(dynamics_dales_constraint*p)
+
+    W = cp.Variable((ExyT.shape[1], ExxT.shape[0]))
+    W.value = initial_C
+    # add constraints such that W is block sparse and non negative
+    
+    constraints = [W[e_cells,:][:,:d_e]>=0, W[e_cells,:][:,d_e:p]==0, W[i_cells, :][:,(p-d_e):p]>=0, W[i_cells, :][:, :(p-d_e)]==0]
+
+    R_inv = np.linalg.inv(etas)
+    L = np.linalg.cholesky(R_inv)
+    kron_ExxT = np.kron(ExxT, np.eye(ExyT.shape[1]))
+    # add the objective function
+    objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExxT) - 2*cp.trace(R_inv@W@ExyT))
+    # solve the problems
+    prob = cp.Problem(objective, constraints)
+    prob.solve(solver=cp.MOSEK, verbose=False, warm_start=True,)
+    # check if the problem is solved
+    if prob.status != 'optimal':
+        print("Warning: M step for C failed to converge!")
+    return W.value
+    
+
 def solve_regression_for_blocks(ExxT_block, ExyT_block, fit_intercept, initial_C_block, etas_block):
     """ learn the two blocks of emission C matrix for E and I cells using cvxpy
     """
@@ -296,38 +329,40 @@ def fit_linear_regression(Xs, ys,
         e_cells = np.where(infer_sign == 1)[0].astype(int)
         i_cells = np.where(infer_sign == -1)[0].astype(int)
 
-        # separate the excitatory and inhibitory blocks for known cells,
-        if len(unknown_cells) > 0:
-            # with a separate block for unknown cells 
-            ExxT_block, ExyT_block, ExyT_unknown, initial_C_block, initial_C_unknown_block = \
-                create_expectation_blocks(ExxT, ExyT, fit_intercept, infer_sign, dynamics_dales_constraint, block_diagonal, initial_C)
-        else:
-            # without a separate block for unknown cells 
-            ExxT_block, ExyT_block, initial_C_block, etas_block = \
-                create_expectation_blocks(ExxT, ExyT, fit_intercept, infer_sign, dynamics_dales_constraint, block_diagonal, initial_C, current_etas)
+        W_full = solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, current_etas, dynamics_dales_constraint, infer_sign)
 
-        # solve for each known block of C 
-        results = solve_regression_for_blocks(ExxT_block, ExyT_block, fit_intercept, initial_C_block, etas_block)
+        # # separate the excitatory and inhibitory blocks for known cells,
+        # if len(unknown_cells) > 0:
+        #     # with a separate block for unknown cells 
+        #     ExxT_block, ExyT_block, ExyT_unknown, initial_C_block, initial_C_unknown_block = \
+        #         create_expectation_blocks(ExxT, ExyT, fit_intercept, infer_sign, dynamics_dales_constraint, block_diagonal, initial_C)
+        # else:
+        #     # without a separate block for unknown cells 
+        #     ExxT_block, ExyT_block, initial_C_block, etas_block = \
+        #         create_expectation_blocks(ExxT, ExyT, fit_intercept, infer_sign, dynamics_dales_constraint, block_diagonal, initial_C, current_etas)
 
-        # solve for unknown cells 
-        if len(unknown_cells) > 0:
-            W_unknown, signs = solve_regression_for_unknown_cells(ExxT_block, ExyT_unknown, fit_intercept, initial_C_unknown_block)
+        # # solve for each known block of C 
+        # results = solve_regression_for_blocks(ExxT_block, ExyT_block, fit_intercept, initial_C_block, etas_block)
 
-        W_exc, W_inh = results[0], results[1]
-        # make a block diagonal matrix from the excitatory and inhibitory blocks
-        W_full = np.zeros((d, x_dim))
-        W_full[e_cells, :int(dynamics_dales_constraint*p)] = W_exc[:, :int(dynamics_dales_constraint*p)]
-        W_full[i_cells, int(dynamics_dales_constraint*p):p] = W_inh[:, :int((1-dynamics_dales_constraint)*p)]
+        # # solve for unknown cells 
+        # if len(unknown_cells) > 0:
+        #     W_unknown, signs = solve_regression_for_unknown_cells(ExxT_block, ExyT_unknown, fit_intercept, initial_C_unknown_block)
 
-        if len(unknown_cells)  > 0:
-            W_full[unknown_cells, :] = W_unknown
-        # append the intercept term
-        if fit_intercept:
-            W_full[e_cells, -1] = W_exc[:, -1]
-            W_full[i_cells, -1] = W_inh[:, -1]
+        # W_exc, W_inh = results[0], results[1]
+        # # make a block diagonal matrix from the excitatory and inhibitory blocks
+        # W_full = np.zeros((d, x_dim))
+        # W_full[e_cells, :int(dynamics_dales_constraint*p)] = W_exc[:, :int(dynamics_dales_constraint*p)]
+        # W_full[i_cells, int(dynamics_dales_constraint*p):p] = W_inh[:, :int((1-dynamics_dales_constraint)*p)]
 
+        # if len(unknown_cells)  > 0:
+        #     W_full[unknown_cells, :] = W_unknown
+        # # append the intercept term
+        # if fit_intercept:
+        #     W_full[e_cells, -1] = W_exc[:, -1]
+        #     W_full[i_cells, -1] = W_inh[:, -1]
 
-        # # also get covariance for each block separately 
+        # also get covariance for each block separately 
+        # # E[(y - Ax)(y - Ax)^T]
         # EyyT_block = [EyyT[e_cells, :][:, e_cells], EyyT[i_cells, :][:, i_cells]]
         # expected_err_exc = EyyT_block[0] - W_exc @ ExyT_block[0] - ExyT_block[0].T @ W_exc.T + W_exc @ ExxT_block[0] @ W_exc.T
         # expected_err_inh = EyyT_block[1] - W_inh @ ExyT_block[1] - ExyT_block[1].T @ W_inh.T + W_inh @ ExxT_block[1] @ W_inh.T
@@ -337,9 +372,11 @@ def fit_linear_regression(Xs, ys,
         # expected_err[i_cells, :][:, i_cells] = expected_err_inh
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T
+        
     # Compute expected error for covariance matrix estimate
     # E[(y - Ax)(y - Ax)^T]
     expected_err = EyyT - W_full @ ExyT - ExyT.T @ W_full.T + W_full @ ExxT @ W_full.T
+    
     nu = nu0 + weight_sum
     # Get MAP estimate of posterior covariance
     Sigma = (expected_err + Psi0 * np.eye(d)) / (nu + d + 1)
