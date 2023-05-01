@@ -680,7 +680,7 @@ class SLDS(object):
             # only allowed for gaussian emissions 
             assert isinstance(self.emissions, emssn.GaussianEmissions), "emission_block_diagonal only allowed for GaussianEmissions"
 
-        if isinstance(self.emissions, emssn.GaussianEmissions) and self.K==1:
+        if isinstance(self.emissions, emssn.GaussianEmissions):
             continuous_expectations = variational_posterior.continuous_expectations
             curr_prms = copy.deepcopy(self.emissions.params)
             self.emissions.m_step(discrete_expectations, 

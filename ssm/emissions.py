@@ -355,10 +355,10 @@ class _GaussianEmissionsMixin(object):
     def __init__(self, N, K, D, M=0, single_subspace=True, **kwargs):
         super(_GaussianEmissionsMixin, self).__init__(N, K, D, M=M, single_subspace=single_subspace, **kwargs)
         # self.inv_etas = -1 + npr.randn(1, N) if single_subspace else npr.randn(K, N)
-        self.inv_etas = np.random.randn(K, N, N)
+        self.inv_etas = np.random.randn(1, N, N) if single_subspace else np.random.randn(K, N, N)
         # parameters of the inverse wishart prior on the emission noise
-        self.Psi0 = np.ones(K)
-        self.nu0 = np.ones(K)
+        self.Psi0 = np.ones(1) if single_subspace else np.ones(K)
+        self.nu0 = np.ones(1) if single_subspace else np.ones(K)
 
     @property
     def params(self):
@@ -422,15 +422,15 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             block = -1.0 * self.Cs[0].T@R_inv@self.Cs[0]
             hess = np.tile(block[None,:,:], (T, 1, 1))
         else:
-            # TODO: ideally this should be fixed
-            blocks = np.array([-1.0 * C.T@np.diag(1.0/np.exp(inv_eta))@C
+            blocks = np.array([-1.0 * C.T@inv_eta@C
                                for C, inv_eta in zip(self.Cs, self.inv_etas)])
             hess = np.sum(Ez[:,:,None,None] * blocks, axis=1)
         return -1 * hess
     
     def log_prior(self,):
         log_prior = 0
-        for k in range(self.K):
+        K = 1 if self.single_subspace else self.K
+        for k in range(K):
            # compute inverse wishart prior on the emission noise
             log_prior += log_prior + invwishart.logpdf(self.inv_etas[k], self.nu0[k] + self.N +1, self.Psi0[k]*np.eye(self.N))
         return log_prior
@@ -447,28 +447,28 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         else:
             Xs = [np.column_stack([x, u]) for (_, x, _, _), u in
                     zip(continuous_expectations, inputs)]
-
-            EyyT = np.zeros((self.N, self.N))
-            ExxT = np.zeros((self.D+1, self.D+1))
-            ExyT = np.zeros((self.D+1, self.N))
+            K = self.K
+            EyyT = np.zeros((K, self.N, self.N))
+            ExxT = np.zeros((K, self.D+1, self.D+1))
+            ExyT = np.zeros((K, self.D+1, self.N))
             weight_sum = 0
 
             weights = [np.ones(y.shape[0]) for y in ys]
 
-            for X, y, weight, (_, Ex, smoothed_sigmas, _) in zip(Xs, ys, weights, continuous_expectations):
-                EyyT += np.sum(np.einsum('ti,tj->tij',y, y) , axis=0)
-                # ExxT
-                mumuT = np.einsum('ti,tj->tij',Ex, Ex) + smoothed_sigmas
-                ExxT[:self.D,:self.D] += np.sum(mumuT, axis=0)
-                ExxT[self.D,:self.D] += np.sum(Ex, axis=0)
-                ExxT[:self.D,self.D] += np.sum(Ex, axis=0)
-                ExxT[self.D,self.D] += Ex.shape[0]
-                # ExyT
-                ExyT[:self.D,:] += np.sum(np.einsum('ti,tj->tij',Ex, y), axis=0)
-                ExyT[self.D,:] += np.sum(y, axis=0)
-                weight_sum += np.sum(weight)
-
-            expectations = [ExxT, ExyT, EyyT, weight_sum]
+            for y, weight, (_, Ex, smoothed_sigmas, _), (Ez, _, _), in zip(ys, weights, continuous_expectations, discrete_expectations):
+                for k in range(self.K):
+                    w = Ez[:,k]
+                    EyyT[k] += np.einsum('t,ti,tj->ij',w, y, y)
+                    # ExxT
+                    mumuT = np.einsum('ti,tj->tij',Ex, Ex) + smoothed_sigmas
+                    ExxT[k, :self.D,:self.D] += np.einsum('t, tij->ij',w, mumuT)
+                    ExxT[k, self.D,:self.D] += np.einsum('t, ti->i',w, Ex)
+                    ExxT[k, :self.D,self.D] += np.einsum('t, ti->i',w, Ex)
+                    ExxT[k, self.D,self.D] += np.sum(w)
+                    # ExyT
+                    ExyT[k, :self.D,:] += np.einsum('t,ti,tj->ij', w, Ex, y)
+                    ExyT[k, self.D,:] += np.einsum('t,ti->i', w, y)
+                    weight_sum += np.sum(weight)
 
 
         ws = [Ez for (Ez, _, _) in discrete_expectations]
@@ -486,6 +486,8 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         if self.single_subspace and all([np.all(mask) for mask in masks]):
             # Return exact m-step updates for C, F, d, and inv_etas
             initial_C = np.hstack(([self.Cs[0], self.ds[0][:, None]]))
+            # get expectations in right shape
+            expectations = [ExxT[0], ExyT[0], EyyT[0], weight_sum]
             CF, d, Sigma = fit_linear_regression(
                 Xs, ys,
                 expectations=expectations, 
@@ -500,15 +502,22 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             self.ds = d[None, :]
             self.inv_etas = Sigma[None, :]
         else:
-            if block_diagonal:
-                raise ValueError("Block diagonal updates not supported for non-single-subspace models") 
             Cs, Fs, ds, inv_etas = [], [], [], []
             for k in range(self.K):
+                initial_C = np.hstack(([self.Cs[k], self.ds[k][:, None]]))
+                # get expectations in right shape
+                expectations = [ExxT[k], ExyT[k], EyyT[k], weight_sum]
                 CF, d, Sigma = fit_linear_regression(
-                    Xs, ys, weights=[w[:, k] for w in ws],
+                    Xs, ys, 
+                    expectations = expectations,
+                    weights=[w[:, k] for w in ws],
                     Psi0=self.Psi0[k], nu0=self.nu0[k],
                     prior_ExxT=1e-4 * np.eye(self.D + self.M + 1),
-                    prior_ExyT=np.zeros((self.D + self.M + 1, self.N)))
+                    prior_ExyT=np.zeros((self.D + self.M + 1, self.N)),
+                    block_diagonal=block_diagonal,
+                    dynamics_dales_constraint = dynamics_dales_constraint,  
+                    infer_sign = infer_sign,
+                    initial_C=initial_C, current_etas=self.inv_etas[0])
                 Cs.append(CF[:, :self.D])
                 Fs.append(CF[:, self.D:])
                 ds.append(d)
@@ -516,6 +525,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             self.Cs = np.array(Cs)
             self.Fs = np.array(Fs)
             self.ds = np.array(ds)
+            # check if we have a singl
             self.inv_etas = np.array(inv_etas)
 
 
