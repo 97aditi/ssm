@@ -491,7 +491,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
 
         if self.single_subspace and all([np.all(mask) for mask in masks]):
             # Return exact m-step updates for C, F, d, and inv_etas
-            initial_C = np.hstack(([self.Cs[0], self.ds[0][:, None]]))
+            initial_C = np.hstack(([self.Cs[0], self.Fs[0], self.ds[0][:, None]]))
             # get expectations in right shape
             expectations = [ExxT[0], ExyT[0], EyyT[0], weight_sum]
             CF, d, Sigma = fit_linear_regression(
@@ -511,7 +511,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         else:
             Cs, Fs, ds, inv_etas = [], [], [], []
             for k in range(self.K):
-                initial_C = np.hstack(([self.Cs[k], self.ds[k][:, None]]))
+                initial_C = np.hstack(([self.Cs[k], self.Fs[k], self.ds[k][:, None]]))
                 # get expectations in right shape
                 expectations = [ExxT[k], ExyT[k], EyyT[k], weight_sum]
                 CF, d, Sigma = fit_linear_regression(
