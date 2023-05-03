@@ -42,24 +42,20 @@ model_kwarg_descriptions = dict(
     negative_binomial=dict(r="The \"number of failures\" parameterizing the negative binomial distribution.")
     )
 
-def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_dales_constraint, infer_sign):
+def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_dales_constraint, infer_sign, latent_space_dim):
     """ learn the emission matrix C with block-sparse constraints"""
 
     # let's get the indices of the excitatory and inhibitory cells
     e_cells = np.where(infer_sign == 1)[0].astype(int)
     i_cells = np.where(infer_sign == -1)[0].astype(int)
     # get the dimension of the latent space 
-    if fit_intercept:
-        p = ExxT.shape[0] - 1
-    else:
-        p = ExxT.shape[0]
-    d_e = int(dynamics_dales_constraint*p)
+    d_e = int(dynamics_dales_constraint*latent_space_dim)
 
     W = cp.Variable((ExyT.shape[1], ExxT.shape[0]))
     W.value = initial_C
     # add constraints such that W is block sparse and non negative
     
-    constraints = [W[e_cells,:][:,:d_e]>=0, W[e_cells,:][:,d_e:p]==0, W[i_cells, :][:,(p-d_e):p]>=0, W[i_cells, :][:, :(p-d_e)]==0]
+    constraints = [W[e_cells,:][:,:d_e]>=0, W[e_cells,:][:,d_e:latent_space_dim]==0, W[i_cells, :][:,(latent_space_dim-d_e):latent_space_dim]>=0, W[i_cells, :][:, :(latent_space_dim-d_e)]==0]
 
     R_inv = np.linalg.inv(etas)
     L = np.linalg.cholesky(R_inv)
@@ -75,6 +71,7 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
     return W.value
 
 def fit_linear_regression(Xs, ys,
+                          latent_space_dim=1,
                           weights=None,
                           fit_intercept=True,
                           expectations=None,
@@ -163,7 +160,7 @@ def fit_linear_regression(Xs, ys,
 
     # Solve for the MAP estimate
     if block_diagonal>0:
-        W_full = solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, current_etas, dynamics_dales_constraint, infer_sign)
+        W_full = solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, current_etas, dynamics_dales_constraint, infer_sign, latent_space_dim)
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T
         

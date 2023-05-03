@@ -1166,20 +1166,17 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         for k in range(K):
             if dynamics_dales_constraint>0:      
                 # this contains the fraction of positive columns in the dynamics matrix
-
-                # TODO: 
-                #   1. allow M>0
-                
                 assert lags==1, "Only lags==1 is supported for now" 
-                assert M==0, "Only M==0 is supported for now"
 
                 """ Here we used cvxpy to solve the linear regression problem"""
 
                 # modifying this to cvxpy so as to put dale's law
-                W = cp.Variable((D,(D*lags+1)))
+                W = cp.Variable((D,(D*lags+M+1)))
                 # initialize W to the dynamics matrix
-                W_inital = np.zeros((D, D*lags+1))
+                W_inital = np.zeros((D, D*lags+M+1))
                 W_inital[:D,:D*lags] = self.As[k]
+                if M>0:
+                    W_inital[:D,D*lags:D*lags+M] = self.Vs[k]
                 W_inital[:,-1] = self.bs[k]
                 W.value = W_inital
 

@@ -440,35 +440,41 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                optimizer="bfgs", maxiter=100, **kwargs):
         
         ys = datas
-        if self.M>0:
-            Xs = [np.column_stack([x, u]) for x, u in
-                    zip(continuous_expectations, inputs)]
-            expectations = None
-        else:
-            Xs = [np.column_stack([x, u]) for (_, x, _, _), u in
-                    zip(continuous_expectations, inputs)]
-            K = self.K
-            EyyT = np.zeros((K, self.N, self.N))
-            ExxT = np.zeros((K, self.D+1, self.D+1))
-            ExyT = np.zeros((K, self.D+1, self.N))
-            weight_sum = 0
+        Xs = [np.column_stack([x, u]) for (_, x, _, _), u in
+                zip(continuous_expectations, inputs)]
+        K = self.K
+        M = self.M
 
-            weights = [np.ones(y.shape[0]) for y in ys]
+        EyyT = np.zeros((K, self.N, self.N))
+        ExxT = np.zeros((K, self.D+M+1, self.D+M+1))
+        ExyT = np.zeros((K, self.D+M+1, self.N))
+        weight_sum = 0
 
-            for y, weight, (_, Ex, smoothed_sigmas, _), (Ez, _, _), in zip(ys, weights, continuous_expectations, discrete_expectations):
-                for k in range(self.K):
-                    w = Ez[:,k]
-                    EyyT[k] += np.einsum('t,ti,tj->ij',w, y, y)
-                    # ExxT
-                    mumuT = np.einsum('ti,tj->tij',Ex, Ex) + smoothed_sigmas
-                    ExxT[k, :self.D,:self.D] += np.einsum('t, tij->ij',w, mumuT)
-                    ExxT[k, self.D,:self.D] += np.einsum('t, ti->i',w, Ex)
-                    ExxT[k, :self.D,self.D] += np.einsum('t, ti->i',w, Ex)
-                    ExxT[k, self.D,self.D] += np.sum(w)
-                    # ExyT
-                    ExyT[k, :self.D,:] += np.einsum('t,ti,tj->ij', w, Ex, y)
-                    ExyT[k, self.D,:] += np.einsum('t,ti->i', w, y)
-                    weight_sum += np.sum(weight)
+        weights = [np.ones(y.shape[0]) for y in ys]
+
+        for y, input, weight, (_, Ex, smoothed_sigmas, _), (Ez, _, _), in zip(ys, inputs, weights, continuous_expectations, discrete_expectations):
+            for k in range(self.K):
+                w = Ez[:,k]
+                EyyT[k] += np.einsum('t,ti,tj->ij',w, y, y)
+                # ExxT
+                mumuT = np.einsum('ti,tj->tij',Ex, Ex) + smoothed_sigmas
+                ExxT[k, :self.D,:self.D] += np.einsum('t, tij->ij',w, mumuT)
+                ExxT[k, -1,:self.D] += np.einsum('t, ti->i',w, Ex)
+                ExxT[k, :self.D, -1] += np.einsum('t, ti->i',w, Ex)
+                ExxT[k, -1, -1] += np.sum(w)
+                if self.M>0:
+                    ExxT[k, self.D:self.D+M, self.D:self.D+M] += np.einsum('t, ti, tj->ij',w, input, input)
+                    ExxT[k, :self.D, self.D:self.D+M] += np.einsum('t, ti, tj->ij',w, Ex, input)
+                    ExxT[k, self.D:self.D+M, :self.D] += np.einsum('t, ti, tj->ij',w, Ex, input).T
+                    ExxT[k, -1, self.D:self.D+M] += np.einsum('t, ti->i',w, input)
+                    ExxT[k, self.D:self.D+M, -1] += np.einsum('t, ti->i',w, input)
+
+                # ExyT
+                ExyT[k, :self.D,:] += np.einsum('t,ti,tj->ij', w, Ex, y)
+                ExyT[k, -1,:] += np.einsum('t,ti->i', w, y)
+                if M>0:
+                    ExyT[k, self.D:self.D+M,:] += np.einsum('t,ti,tj->ij', w, input, y)
+                weight_sum += np.sum(weight)
 
 
         ws = [Ez for (Ez, _, _) in discrete_expectations]
@@ -490,6 +496,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             expectations = [ExxT[0], ExyT[0], EyyT[0], weight_sum]
             CF, d, Sigma = fit_linear_regression(
                 Xs, ys,
+                latent_space_dim=self.D,
                 expectations=expectations, 
                 Psi0=self.Psi0[0], nu0=self.nu0[0],
                 prior_ExxT=1e-4 * np.eye(self.D + self.M + 1),
@@ -509,6 +516,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                 expectations = [ExxT[k], ExyT[k], EyyT[k], weight_sum]
                 CF, d, Sigma = fit_linear_regression(
                     Xs, ys, 
+                    latent_space_dim=self.D,
                     expectations = expectations,
                     weights=[w[:, k] for w in ws],
                     Psi0=self.Psi0[k], nu0=self.nu0[k],

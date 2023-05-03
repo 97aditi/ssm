@@ -739,16 +739,14 @@ class SLDS(object):
             assert isinstance(self.dynamics, obs.AutoRegressiveObservations), "only implemented for Gaussian LDS"
             assert isinstance(self.emissions, emssn.GaussianEmissions), "only implemented for Gaussian LDS"
             assert self.K==1, "only implemented for K=1"
-            assert self.M==0, "only implemented for M=1" 
-            # TODO: implement for M>0
 
             # get the current model parameters
-            As, bs, _, _ = self.dynamics.params
-            Cs, _, ds, inv_etas = self.emissions.params
+            As, bs, Bs, _ = self.dynamics.params
+            Cs, Fs, ds, inv_etas = self.emissions.params
 
             # append the bias to the dynamics
-            A = np.concatenate((As[0], bs[0][:,None]), axis=1)
-            C = np.concatenate((Cs[0], ds[0][:,None]), axis=1)
+            A = np.concatenate((As[0], bs[0][:,None], Bs[0]), axis=1)
+            C = np.concatenate((Cs[0], ds[0][:,None], Fs[0]), axis=1)
 
             # obtain covariances and their inverses
             Q = self.dynamics.Sigmas[0]
@@ -761,33 +759,53 @@ class SLDS(object):
 
             # now ompute them usin smoothed means and covariances
             continuous_expectations = variational_posterior.continuous_expectations
-            for (_, Ex, smoothed_sigmas, ExxnT), data in zip(continuous_expectations, datas):
+            for (_, Ex, smoothed_sigmas, ExxnT), data, input in zip(continuous_expectations, datas, inputs):
 
                 # compute the sufficient statistics for the continuous states
-                ExxnT_intercept = np.zeros((self.D+1, self.D))
+                ExxnT_intercept = np.zeros((self.D+1+self.M, self.D))
                 ExxnT_intercept[:self.D, :self.D] = np.sum(ExxnT, axis=0)
                 ExxnT_intercept[self.D, :self.D] = np.sum(Ex[1:], axis=0)
+                # TODO: make sure we want to go ahead with u_{t+1}, rather than u_t
+                if self.M>0:
+                    ExxnT_intercept[self.D+1:self.M, :self.D] = np.sum(np.einsum('ti,tj->tij',input[1:], Ex[1:]), axis=0)
 
-                ExyT_intercept = np.zeros((self.D+1, self.N))
-                ExyT_intercept[:self.D,:] = np.sum(np.einsum('ti,tj->tij',Ex, data), axis=0)
+                ExyT_intercept = np.zeros((self.D+1+self.M, self.N))
+                ExyT_intercept[:self.D,] = np.sum(np.einsum('ti,tj->tij',Ex, data), axis=0)
                 ExyT_intercept[self.D,:] = np.sum(data, axis=0)
+                # now include the input term
+                if self.M>0:
+                    ExyT_intercept[self.D+1:self.M,:] = np.sum(np.einsum('ti,tj->tij',input, data), axis=0)
 
                 EyyT = np.sum(np.einsum('ti,tj->tij',data, data), axis=0)
                 
                 mumuT = np.einsum('ti,tj->tij',Ex, Ex) + smoothed_sigmas
                 ExxT_2T = np.sum(mumuT[1:], axis=0)
 
-                ExxT_intercept_1T_1 = np.zeros((self.D+1, self.D+1))
+                ExxT_intercept_1T_1 = np.zeros((self.D+1+self.M, self.D+1+self.M))
                 ExxT_intercept_1T_1[:self.D,:self.D] = np.sum(mumuT[:-1], axis=0)
                 ExxT_intercept_1T_1[self.D,:self.D] = np.sum(Ex[:-1], axis=0)
                 ExxT_intercept_1T_1[:self.D,self.D] = np.sum(Ex[:-1], axis=0)
                 ExxT_intercept_1T_1[self.D,self.D] = data.shape[0]-1
+                # now incoporating inputs
+                if self.M>0:
+                    ExxT_intercept_1T_1[self.D+1:self.D+1+self.M,:self.D] = np.sum(np.einsum('ti,tj->tij',input[1:], Ex[:-1]), axis=0)
+                    ExxT_intercept_1T_1[:self.D,self.D+1:self.D+1+self.M] = np.sum(np.einsum('ti,tj->tij',input[1:], Ex[:-1]), axis=0).T
+                    ExxT_intercept_1T_1[self.D+1:self.D+1+self.M,self.D+1:self.D+1+self.M] = np.sum(np.einsum('ti,tj->tij',input[1:], input[1:]), axis=0)
+                    ExxT_intercept_1T_1[self.D+1:self.D+1+self.M,self.D] = np.sum(input[1:], axis=0)
+                    ExxT_intercept_1T_1[self.D,self.D+1:self.D+1+self.M] = np.sum(input[1:], axis=0)
 
-                ExxT_intercept = np.zeros((self.D+1, self.D+1))
+                ExxT_intercept = np.zeros((self.D+1+self.M, self.D+1+self.M))
                 ExxT_intercept[:self.D,:self.D] = np.sum(mumuT, axis=0)
                 ExxT_intercept[self.D,:self.D] = np.sum(Ex, axis=0)
                 ExxT_intercept[:self.D,self.D] = np.sum(Ex, axis=0)
                 ExxT_intercept[self.D,self.D] = data.shape[0]
+                # now incoporating inputs
+                if self.M>0:
+                    ExxT_intercept[self.D+1:self.D+1+self.M,:self.D] = np.sum(np.einsum('ti,tj->tij',input, Ex), axis=0)
+                    ExxT_intercept[:self.D,self.D+1:self.D+1+self.M] = np.sum(np.einsum('ti,tj->tij',input, Ex), axis=0).T
+                    ExxT_intercept[self.D+1:self.D+1+self.M,self.D+1:self.D+1+self.M] = np.sum(np.einsum('ti,tj->tij',input, input), axis=0)
+                    ExxT_intercept[self.D+1:self.D+1+self.M,self.D] = np.sum(input, axis=0)
+                    ExxT_intercept[self.D,self.D+1:self.D+1+self.M] = np.sum(input, axis=0)
 
                 # now compute the log likelihood
                 ll_dynamics += -0.5*np.trace(Q_inv@ExxT_2T) + np.trace(Q_inv@A@ExxnT_intercept) -0.5*np.trace(Q_inv@A@ExxT_intercept_1T_1@A.T) \
@@ -934,6 +952,8 @@ class SLDS(object):
                             num_init_restarts=num_init_restarts,)
         
         if init_nnmf is not None:
+            # currently it only works for K=1
+            assert self.K == 1, "init_nnmf only works for K=1"
             print("initializing model parameters")
             if len(init_nnmf) == 2:
                 self.initialize_with_nnmf(init_nnmf, datas, inputs, masks, tags,)
