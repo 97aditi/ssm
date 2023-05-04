@@ -208,8 +208,6 @@ class SLDS(object):
 
         # currently only valid for gaussian emissions
         assert isinstance(self.emissions, emssn.GaussianEmissions), "Currently only valid for Gaussian emissions"
-        # currently only valid for no inputs
-        assert self.M==0, "Currently only valid for no inputs"
         
         # First initialize the observation model, with the first element in the NNMF list
         emission_init = init_nnmf[1].T
@@ -767,14 +765,14 @@ class SLDS(object):
                 ExxnT_intercept[self.D, :self.D] = np.sum(Ex[1:], axis=0)
                 # TODO: make sure we want to go ahead with u_{t+1}, rather than u_t
                 if self.M>0:
-                    ExxnT_intercept[self.D+1:self.M, :self.D] = np.sum(np.einsum('ti,tj->tij',input[1:], Ex[1:]), axis=0)
+                    ExxnT_intercept[self.D+1:self.D+1+self.M, :self.D] = np.sum(np.einsum('ti,tj->tij',input[1:], Ex[1:]), axis=0)
 
                 ExyT_intercept = np.zeros((self.D+1+self.M, self.N))
                 ExyT_intercept[:self.D,] = np.sum(np.einsum('ti,tj->tij',Ex, data), axis=0)
                 ExyT_intercept[self.D,:] = np.sum(data, axis=0)
                 # now include the input term
                 if self.M>0:
-                    ExyT_intercept[self.D+1:self.M,:] = np.sum(np.einsum('ti,tj->tij',input, data), axis=0)
+                    ExyT_intercept[self.D+1:self.D+1+self.M,:] = np.sum(np.einsum('ti,tj->tij',input, data), axis=0)
 
                 EyyT = np.sum(np.einsum('ti,tj->tij',data, data), axis=0)
                 
