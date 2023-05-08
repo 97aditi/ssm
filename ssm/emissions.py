@@ -395,8 +395,11 @@ class _GaussianEmissionsMixin(object):
         T = z.shape[0]
         z = np.zeros_like(z, dtype=int) if self.single_subspace else z
         mus = self.forward(x, input, tag)
-        etas = self.inv_etas
-        return mus[np.arange(T), z, :] + npr.multivariate_normal(np.zeros(self.D), etas[z], size=T)
+        etas = self.inv_etas        
+        noise = np.zeros((T, self.N))
+        for t in range(T):
+            noise[t] = npr.multivariate_normal(np.zeros(self.N), etas[z[t]])
+        return mus[np.arange(T), z, :] + noise
 
     def smooth(self, expected_states, variational_mean, data, input=None, mask=None, tag=None):
         mus = self.forward(variational_mean, input, tag)
