@@ -664,7 +664,6 @@ class SLDS(object):
             # in the true sufficient statistics for the continuous state.
             kwargs["continuous_expectations"] = variational_posterior.continuous_expectations
             self.dynamics.m_step(**kwargs)
-            # print("after dynamics: " +str(self._laplace_em_elbo(variational_posterior, datas, inputs, masks, tags, n_samples=1)))
 
         else:
             # Otherwise, do an approximate m-step by sampling.

@@ -396,10 +396,11 @@ class _GaussianEmissionsMixin(object):
         z = np.zeros_like(z, dtype=int) if self.single_subspace else z
         mus = self.forward(x, input, tag)
         etas = self.inv_etas        
-        noise = np.zeros((T, self.N))
+        samples_predicted = np.zeros((T, self.N))
         for t in range(T):
-            noise[t] = npr.multivariate_normal(np.zeros(self.N), etas[z[t]])
-        return mus[np.arange(T), z, :] + noise
+            samples_predicted[t] = npr.multivariate_normal(mus[t, z[t], :].reshape((self.N,)), etas[z[t]])
+            # samples_predicted[t] = mus[t, z[t], :].reshape((self.N,))
+        return samples_predicted
 
     def smooth(self, expected_states, variational_mean, data, input=None, mask=None, tag=None):
         mus = self.forward(variational_mean, input, tag)
@@ -510,6 +511,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             self.Cs = CF[None, :, :self.D]
             self.Fs = CF[None, :, self.D:]
             self.ds = d[None, :]
+            Sigma = np.diag(np.diag(Sigma))
             self.inv_etas = Sigma[None, :]
         else:
             Cs, Fs, ds, inv_etas = [], [], [], []
@@ -532,7 +534,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                 Cs.append(CF[:, :self.D])
                 Fs.append(CF[:, self.D:])
                 ds.append(d)
-                inv_etas.append(Sigma)
+                inv_etas.append(np.diag(np.diag(Sigma)))
             self.Cs = np.array(Cs)
             self.Fs = np.array(Fs)
             self.ds = np.array(ds)

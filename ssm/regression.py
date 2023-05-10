@@ -42,33 +42,105 @@ model_kwarg_descriptions = dict(
     negative_binomial=dict(r="The \"number of failures\" parameterizing the negative binomial distribution.")
     )
 
+
+def solve_regression_for_unknown_cells(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_dales_constraint, infer_sign, latent_space_dim):
+    """ learn the emission matrix C with block-sparse constraints for cells whose identities is unknown """
+    # let's get the indices of unknown cells
+    unknown_cells = np.where(infer_sign == 0)[0].astype(int)
+    # get the dimension of the latent space
+    d_e = int(dynamics_dales_constraint*latent_space_dim)
+    # let's get ExyT corresponding to unknown cells
+    ExyT = ExyT[:, unknown_cells]
+    C_unknown = np.zeros((len(unknown_cells), ExxT.shape[0]))
+
+    # now for each unknown cell, we will learn the sign separately and solve for C separately 
+    for i in range(len(unknown_cells)):
+        # let's initialize the emission matrix for the unknown cell
+        W = cp.Variable((ExxT.shape[0]))
+        
+        # let's get the ExyT corresponding to the unknown cell
+        ExyT_i = ExyT[:, i]
+        # we will solve two problems, one for positive sign and one for negative sign
+        # add constraints such that W is block sparse and non negative
+        constraints_e = [W[:d_e]>=0, W[d_e:latent_space_dim]==0]
+        constraints_i = [W[(latent_space_dim-d_e):latent_space_dim]>=0, W[:(latent_space_dim-d_e)]==0]
+        objective = cp.Minimize(cp.quad_form((W).flatten(), ExxT) - 2*W.T@ExyT_i)
+        prob = cp.Problem(objective, constraints_e)
+        prob.solve(solver=cp.MOSEK, verbose=False, warm_start=False,)
+        # check if the problem is solved
+        if prob.status != 'optimal':
+            print("Warning: M step for C unknown failed to converge!")
+        # get the error
+        error_e = prob.value
+        W_e = W.value
+        # solve the problem with the other set of constraints, reset value
+        prob = cp.Problem(objective, constraints_i)
+        prob.solve(solver=cp.MOSEK, verbose=False, warm_start=False,)
+        # check if the problem is solved
+        if prob.status != 'optimal':
+            print("Warning: M step for C unknown failed to converge!")
+        # get the error
+        error_i = prob.value
+        W_i = W.value
+        # compare the errors and choose the sign with lower error
+        if error_e < error_i:
+            C_unknown[i, :] = W_e
+        else:
+            C_unknown[i, :] = W_i
+    # let's return the emission matrix
+    return C_unknown
+            
 def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_dales_constraint, infer_sign, latent_space_dim):
     """ learn the emission matrix C with block-sparse constraints"""
 
     # let's get the indices of the excitatory and inhibitory cells
     e_cells = np.where(infer_sign == 1)[0].astype(int)
     i_cells = np.where(infer_sign == -1)[0].astype(int)
+    unknown_cells = np.where(infer_sign == 0)[0].astype(int)
+
+    # if unknown cells exist, we will learn the sign of the unknown cells separately
+    # first remove columns from ExyT corresponding to unknown cells
+    if len(unknown_cells)>0:
+        ExyT_known = ExyT[:, np.concatenate((e_cells, i_cells))]
+        infer_sign_new = infer_sign[np.concatenate((e_cells, i_cells))]
+        # get new e and i cell indices
+        new_e_cells = np.where(infer_sign_new == 1)[0].astype(int)
+        new_i_cells = np.where(infer_sign_new == -1)[0].astype(int)
+    else:
+        ExyT_known = ExyT
+
     # get the dimension of the latent space 
     d_e = int(dynamics_dales_constraint*latent_space_dim)
 
-    W = cp.Variable((ExyT.shape[1], ExxT.shape[0]))
-    W.value = initial_C
+    W = cp.Variable((ExyT_known.shape[1], ExxT.shape[0]))
+    W.value = initial_C[np.concatenate((e_cells, i_cells)), :]
     # add constraints such that W is block sparse and non negative
     
-    constraints = [W[e_cells,:][:,:d_e]>=0, W[e_cells,:][:,d_e:latent_space_dim]==0, W[i_cells, :][:,(latent_space_dim-d_e):latent_space_dim]>=0, W[i_cells, :][:, :(latent_space_dim-d_e)]==0]
+    constraints = [W[new_e_cells,:][:,:d_e]>=0, W[new_e_cells,:][:,d_e:latent_space_dim]==0, W[new_i_cells, :][:,(latent_space_dim-d_e):latent_space_dim]>=0, \
+                   W[new_i_cells, :][:, :(latent_space_dim-d_e)]==0]
 
-    R_inv = np.linalg.inv(etas)
+    R_inv = np.linalg.inv(etas)[np.concatenate((e_cells, i_cells)), :][:, np.concatenate((e_cells, i_cells)),]
     L = np.linalg.cholesky(R_inv)
-    kron_ExxT = np.kron(ExxT, np.eye(ExyT.shape[1]))
+    kron_ExxT = np.kron(ExxT, np.eye(ExyT_known.shape[1]))
     # add the objective function
-    objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExxT) - 2*cp.trace(R_inv@W@ExyT))
+    objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExxT) - 2*cp.trace(R_inv@W@ExyT_known))
     # solve the problems
     prob = cp.Problem(objective, constraints)
     prob.solve(solver=cp.MOSEK, verbose=False, warm_start=True,)
     # check if the problem is solved
     if prob.status != 'optimal':
         print("Warning: M step for C failed to converge!")
-    return W.value
+
+    # solve regression for unknown cells
+    if len(unknown_cells)>0:
+        W_unknown = solve_regression_for_unknown_cells(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_dales_constraint, infer_sign, latent_space_dim)
+        # let's put the emission matrix back together
+        W_full = np.zeros((infer_sign.shape[0], ExxT.shape[0]))
+        W_full[np.concatenate((e_cells, i_cells)), :] = W.value
+        W_full[unknown_cells, :] = W_unknown
+        return W_full
+    else:
+        return W.value
 
 def fit_linear_regression(Xs, ys,
                           latent_space_dim=1,
@@ -157,6 +229,8 @@ def fit_linear_regression(Xs, ys,
         check_shape(ExyT, "ExyT", (x_dim, d))
         check_shape(EyyT, "EyyT", (d, d))
 
+    # let's check if we have unknown cells, in which case we will force sigma to be diagonal
+    unknown_cells = np.where(infer_sign==0)[0]
 
     # Solve for the MAP estimate
     if block_diagonal>0:
@@ -171,6 +245,8 @@ def fit_linear_regression(Xs, ys,
     nu = nu0 + weight_sum
     # Get MAP estimate of posterior covariance
     Sigma = (expected_err + Psi0 * np.eye(d)) / (nu + d + 1)
+    if len(unknown_cells)>0:
+        Sigma = np.diag(np.diag(Sigma))
 
     if fit_intercept:
         W, b = W_full[:, :-1], W_full[:, -1]
