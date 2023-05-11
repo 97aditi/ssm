@@ -1185,8 +1185,18 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 assert lags==1, "Only lags==1 is supported for now"
                 # add constraints on the dynamics vector
                 constraints = []
-                constraints.append(W[:, :int(dynamics_dales_constraint*D)] >= 0)
-                constraints.append(W[:, int(dynamics_dales_constraint*D):D] <= 0)
+                d_e = int(dynamics_dales_constraint*D)
+                for i in range(D):
+                    # get all indices until d_e except for i itself
+                    indices = list(range(d_e))
+                    indices.remove(i)
+                    # add the constraint
+                    constraints.append(W[i, indices ] >= 0)
+                    # now get all indices after d_e except for i itself
+                    indices = list(range(d_e,D))
+                    indices.remove(i)
+                    # add the constraint
+                    constraints.append(W[i, indices] <= 0)
                 # get the inverse of Sigma
                 Q_inv = np.linalg.inv(self.Sigmas[k])
                 # check if the inverse is correct
