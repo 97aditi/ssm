@@ -108,6 +108,8 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
         new_i_cells = np.where(infer_sign_new == -1)[0].astype(int)
     else:
         ExyT_known = ExyT
+        new_e_cells = e_cells
+        new_i_cells = i_cells
 
     # get the dimension of the latent space 
     d_e = int(dynamics_dales_constraint*latent_space_dim)
