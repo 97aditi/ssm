@@ -63,10 +63,10 @@ def solve_regression_for_unknown_cells(ExxT, ExyT, fit_intercept, initial_C, eta
         # we will solve two problems, one for positive sign and one for negative sign
         # add constraints such that W is block sparse and non negative
         constraints_e = [W[:d_e]>=0, W[d_e:latent_space_dim]==0]
-        constraints_i = [W[(latent_space_dim-d_e):latent_space_dim]>=0, W[:(latent_space_dim-d_e)]==0]
+        constraints_i = [W[d_e:latent_space_dim]>=0, W[:d_e]==0]
         objective = cp.Minimize(cp.quad_form((W).flatten(), ExxT) - 2*W.T@ExyT_i)
         prob = cp.Problem(objective, constraints_e)
-        prob.solve(solver=cp.MOSEK, verbose=False, warm_start=False,)
+        prob.solve(solver=cp.MOSEK, verbose=True, warm_start=False,)
         # check if the problem is solved
         if prob.status != 'optimal':
             print("Warning: M step for C unknown failed to converge!")
@@ -75,7 +75,7 @@ def solve_regression_for_unknown_cells(ExxT, ExyT, fit_intercept, initial_C, eta
         W_e = W.value
         # solve the problem with the other set of constraints, reset value
         prob = cp.Problem(objective, constraints_i)
-        prob.solve(solver=cp.MOSEK, verbose=False, warm_start=False,)
+        prob.solve(solver=cp.MOSEK, verbose=True, warm_start=False,)
         # check if the problem is solved
         if prob.status != 'optimal':
             print("Warning: M step for C unknown failed to converge!")
@@ -128,7 +128,7 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
     objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExxT) - 2*cp.trace(R_inv@W@ExyT_known))
     # solve the problems
     prob = cp.Problem(objective, constraints)
-    prob.solve(solver=cp.MOSEK, verbose=False, warm_start=True,)
+    prob.solve(solver=cp.MOSEK, verbose=True, warm_start=True,)
     # check if the problem is solved
     if prob.status != 'optimal':
         print("Warning: M step for C failed to converge!")
