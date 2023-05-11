@@ -493,6 +493,10 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         if infer_sign is None:
             infer_sign = known_sign
 
+        # check if we have unknown cells
+        if np.sum(infer_sign==0)>0:
+            print('Unknown cells detected, will infer sign of cells')
+
         if self.single_subspace and all([np.all(mask) for mask in masks]):
             # Return exact m-step updates for C, F, d, and inv_etas
             initial_C = np.hstack(([self.Cs[0], self.Fs[0], self.ds[0][:, None]]))
