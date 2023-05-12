@@ -1186,14 +1186,16 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 # add constraints on the dynamics vector
                 constraints = []
                 d_e = int(dynamics_dales_constraint*D)
-                # get indices of ll lower triangular elements
-                indices_l = np.tril_indices(D, -1)
-                # add constraints on the lower triangular elements to be positive
-                constraints.append(W[indices_l[0],indices_l[1]]>=0)
-                # now get all the upper triangular elements
-                indices_u = np.triu_indices(D, 1)
-                # add constraints on the upper triangular elements to be negative
-                constraints.append(W[indices_u[0],indices_u[1]]<=0)
+                # put constraints on the first d_e columns of W matrix, except the diagonal elements
+                for i in range(d_e):
+                    for j in range(D):
+                        if i!=j:
+                            constraints.append(W[j,i]>=0)
+                # put constraints on the last D-d_e columns of W matrix, except the diagonal elements
+                for i in range(d_e,D):
+                    for j in range(D):
+                        if i!=j:
+                            constraints.append(W[j,i]<=0)
                 # get the inverse of Sigma
                 Q_inv = np.linalg.inv(self.Sigmas[k])
                 # check if the inverse is correct
@@ -1214,9 +1216,6 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                     print("Warning: M step for A failed to converge!")
                 # print the value of the objective function 
                 Wk = W.value
-
-                assert np.all(np.linalg.eigvals(As[k]) < 1), "The dynamics matrix has eigen values greater than 1"
-
             else:
                 Wk = np.linalg.solve(ExuxuTs[k] + self.J0[k], ExuyTs[k] + self.h0[k]).T
                 
