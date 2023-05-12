@@ -1186,21 +1186,14 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 # add constraints on the dynamics vector
                 constraints = []
                 d_e = int(dynamics_dales_constraint*D)
-                for i in range(D):
-                    # get all indices until d_e except for i itself
-                    indices = list(range(d_e))
-                    if i<d_e:
-                        indices.remove(i)
-                    # add the constraint
-                    if indices is not None:
-                        constraints.append(W[i, indices ] >= 0)
-                    # now get all indices after d_e except for i itself
-                    indices = list(range(d_e,D))
-                    if i>=d_e:
-                        indices.remove(i)
-                    # add the constraint
-                    if indices is not None:
-                        constraints.append(W[i, indices] <= 0)
+                # get indices of ll lower triangular elements
+                indices_l = np.tril_indices(D, -1)
+                # add constraints on the lower triangular elements to be positive
+                constraints.append(W[indices_l[0],indices_l[1]]>=0)
+                # now get all the upper triangular elements
+                indices_u = np.triu_indices(D, 1)
+                # add constraints on the upper triangular elements to be negative
+                constraints.append(W[indices_u[0],indices_u[1]]<=0)
                 # get the inverse of Sigma
                 Q_inv = np.linalg.inv(self.Sigmas[k])
                 # check if the inverse is correct
