@@ -1185,17 +1185,20 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 assert lags==1, "Only lags==1 is supported for now"
                 # add constraints on the dynamics vector
                 constraints = []
+                # d_e = int(dynamics_dales_constraint*D)
+                # # put constraints on the first d_e columns of W matrix, except the diagonal elements
+                # for i in range(d_e):
+                #     for j in range(D):
+                #         if i!=j:
+                #             constraints.append(W[j,i]>=0)
+                # # put constraints on the last D-d_e columns of W matrix, except the diagonal elements
+                # for i in range(d_e,D):
+                #     for j in range(D):
+                #         if i!=j:
+                #             constraints.append(W[j,i]<=0)
                 d_e = int(dynamics_dales_constraint*D)
-                # put constraints on the first d_e columns of W matrix, except the diagonal elements
-                for i in range(d_e):
-                    for j in range(D):
-                        if i!=j:
-                            constraints.append(W[j,i]>=0)
-                # put constraints on the last D-d_e columns of W matrix, except the diagonal elements
-                for i in range(d_e,D):
-                    for j in range(D):
-                        if i!=j:
-                            constraints.append(W[j,i]<=0)
+                constraints.append(W[:,:d_e]>=0)
+                constraints.append(W[:,d_e:D]<=0)
                 # get the inverse of Sigma
                 Q_inv = np.linalg.inv(self.Sigmas[k])
                 # check if the inverse is correct
@@ -1205,7 +1208,13 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 # check if the cholesky decomposition is successful
                 assert np.allclose(L@L.T, Q_inv), "Cholesky decomposition failed"
                 # get matrices in desired forms
-                kron_ExuxuTs = np.kron((ExuxuTs[k]+self.J0[k]).T, np.eye(D))
+                ExuxuTs = (ExuxuTs[k]+self.J0[k]).T
+                shape_quad = (D*lags+M+1)*D
+                # create a matrix of size D_in**2 x D_in**2
+                kron_ExuxuTs = np.zeros((shape_quad,shape_quad))
+                # fill the matrix with ExuxuTs repeated in a block diagonal fashion
+                for i in range(D):
+                    kron_ExuxuTs[i*(D*lags+M+1):(i+1)*(D*lags+M+1),i*(D*lags+M+1):(i+1)*(D*lags+M+1)] = ExuxuTs
                 # define the objective function
                 objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs[k]+self.h0[k])))
                 # solve the problem

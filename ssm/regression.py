@@ -123,7 +123,11 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
 
     R_inv = np.linalg.inv(etas)[np.concatenate((e_cells, i_cells)), :][:, np.concatenate((e_cells, i_cells)),]
     L = np.linalg.cholesky(R_inv)
-    kron_ExxT = np.kron(ExxT, np.eye(ExyT_known.shape[1]))
+    shape_quad = W.shape[0]*W.shape[1]
+    kron_ExxT = np.zeros((shape_quad, shape_quad))
+    for i in range(W.shape[0]):
+        kron_ExxT[i*W.shape[1]:(i+1)*W.shape[1], i*W.shape[1]:(i+1)*W.shape[1]] = ExxT
+    # kron_ExxT = np.kron(ExxT, np.eye(ExyT_known.shape[1]))
     # add the objective function
     objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExxT) - 2*cp.trace(R_inv@W@ExyT_known))
     # solve the problems
