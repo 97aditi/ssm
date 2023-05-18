@@ -113,9 +113,12 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
 
     # get the dimension of the latent space 
     d_e = int(dynamics_dales_constraint*latent_space_dim)
+    # print latent space dimension an d_e
+    print("latent space dimension: ", latent_space_dim)
+    print("d_e: ", d_e)
 
     W = cp.Variable((ExyT_known.shape[1], ExxT.shape[0]))
-    W.value = initial_C[np.concatenate((e_cells, i_cells)), :]
+    W.value = initial_C
     # add constraints such that W is block sparse and non negative
     
     constraints = [W[new_e_cells,:][:,:d_e]>=0, W[new_e_cells,:][:,d_e:latent_space_dim]==0, W[new_i_cells, :][:,(latent_space_dim-d_e):latent_space_dim]>=0, \
@@ -123,16 +126,12 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
 
     R_inv = np.linalg.inv(etas)[np.concatenate((e_cells, i_cells)), :][:, np.concatenate((e_cells, i_cells)),]
     L = np.linalg.cholesky(R_inv)
-    shape_quad = W.shape[0]*W.shape[1]
-    kron_ExxT = np.zeros((shape_quad, shape_quad))
-    for i in range(W.shape[0]):
-        kron_ExxT[i*W.shape[1]:(i+1)*W.shape[1], i*W.shape[1]:(i+1)*W.shape[1]] = ExxT
-    # kron_ExxT = np.kron(ExxT, np.eye(ExyT_known.shape[1]))
+    kron_ExxT = np.kron(ExxT, np.eye(ExyT_known.shape[1]))
     # add the objective function
     objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExxT) - 2*cp.trace(R_inv@W@ExyT_known))
     # solve the problems
     prob = cp.Problem(objective, constraints)
-    prob.solve(solver=cp.MOSEK, verbose=False, warm_start=True,)
+    prob.solve(solver=cp.MOSEK, verbose=True, warm_start=True,)
     # check if the problem is solved
     if prob.status != 'optimal':
         print("Warning: M step for C failed to converge!")

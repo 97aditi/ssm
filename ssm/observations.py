@@ -1207,14 +1207,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 L = np.linalg.cholesky(Q_inv)
                 # check if the cholesky decomposition is successful
                 assert np.allclose(L@L.T, Q_inv), "Cholesky decomposition failed"
-                # get matrices in desired forms
-                ExuxuTs = (ExuxuTs[k]+self.J0[k]).T
-                shape_quad = (D*lags+M+1)*D
-                # create a matrix of size D_in**2 x D_in**2
-                kron_ExuxuTs = np.zeros((shape_quad,shape_quad))
-                # fill the matrix with ExuxuTs repeated in a block diagonal fashion
-                for i in range(D):
-                    kron_ExuxuTs[i*(D*lags+M+1):(i+1)*(D*lags+M+1),i*(D*lags+M+1):(i+1)*(D*lags+M+1)] = ExuxuTs
+                kron_ExuxuTs = np.kron((ExuxuTs[k]+self.J0[k]).T, np.eye(D))
                 # define the objective function
                 objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs[k]+self.h0[k])))
                 # solve the problem

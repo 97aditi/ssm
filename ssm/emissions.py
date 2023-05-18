@@ -460,7 +460,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             for k in range(self.K):
                 w = Ez[:,k]
                 EyyT[k] += np.einsum('t,ti,tj->ij',w, y, y)
-                # ExxT
+                # ExxT     
                 mumuT = np.einsum('ti,tj->tij',Ex, Ex) + smoothed_sigmas
                 ExxT[k, :self.D,:self.D] += np.einsum('t, tij->ij',w, mumuT)
                 ExxT[k, -1,:self.D] += np.einsum('t, ti->i',w, Ex)
@@ -515,7 +515,6 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             self.Cs = CF[None, :, :self.D]
             self.Fs = CF[None, :, self.D:]
             self.ds = d[None, :]
-            Sigma = np.diag(np.diag(Sigma))
             self.inv_etas = Sigma[None, :]
         else:
             Cs, Fs, ds, inv_etas = [], [], [], []
@@ -538,7 +537,6 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                 Cs.append(CF[:, :self.D])
                 Fs.append(CF[:, self.D:])
                 ds.append(d)
-                inv_etas.append(np.diag(np.diag(Sigma)))
             self.Cs = np.array(Cs)
             self.Fs = np.array(Fs)
             self.ds = np.array(ds)
