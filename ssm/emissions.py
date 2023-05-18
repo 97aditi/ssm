@@ -418,7 +418,8 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         log_prior = 0
         for k in range(self.K):
            # compute inverse wishart prior on the emission noise
-            log_prior += log_prior + invwishart.logpdf(np.diag(np.exp(self.inv_etas[k])), self.nu0[k] + self.N+1, self.Psi0[k]*np.eye(self.N))
+           # NOTE: this is because slds by default has shared emissions so we only have one inv_etas matrix
+            log_prior += log_prior + invwishart.logpdf(np.diag(np.exp(self.inv_etas[0])), self.nu0[k] + self.N+1, self.Psi0[k]*np.eye(self.N))
         return log_prior
 
     def m_step(self, discrete_expectations, continuous_expectations,
