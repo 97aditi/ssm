@@ -125,6 +125,10 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
                    W[new_i_cells, :][:, :(latent_space_dim-d_e)]==0]
 
     R_inv = np.linalg.inv(etas)[np.concatenate((e_cells, i_cells)), :][:, np.concatenate((e_cells, i_cells)),]
+    # let's find the maximum absolute value of an element in R_inv
+    max_abs = np.max(np.abs(R_inv))
+    # Let's scale R_inv by max_abs, to keep the problem bounded and avoid numerical issues; it doesn' affect the solution per se
+    R_inv = R_inv/max_abs
     L = np.linalg.cholesky(R_inv)
     kron_ExxT = np.kron(ExxT, np.eye(ExyT_known.shape[1]))
     # add the objective function
