@@ -807,10 +807,7 @@ class SLDS(object):
             return log_likelihood 
 
         # if isinstance(self.dynamics, obs.AutoRegressiveObservations) and isinstance(self.emissions, emssn.GaussianEmissions) and self.K==1:
-        if n_samples==1:
-            return estimate_complete_data_log_likelihood() + variational_posterior.entropy() 
-        else:
-            return estimate_expected_log_joint(n_samples) + variational_posterior.entropy()
+        return estimate_expected_log_joint(n_samples) + variational_posterior.entropy()
 
     def _fit_laplace_em(self, variational_posterior, datas,
                         inputs=None, masks=None, tags=None,
