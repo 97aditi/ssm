@@ -528,7 +528,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                     expectations = expectations,
                     weights=[w[:, k] for w in ws],
                     Psi0=self.Psi0[k], nu0=self.nu0[k],
-                    prior_ExxT=1e-4 * np.eye(self.D + self.M + 1),
+                    prior_ExxT=1e-4* np.eye(self.D + self.M + 1),
                     prior_ExyT=np.zeros((self.D + self.M + 1, self.N)),
                     block_diagonal=block_diagonal,
                     dynamics_dales_constraint = dynamics_dales_constraint,  
