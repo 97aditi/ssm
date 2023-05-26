@@ -807,7 +807,7 @@ class SLDS(object):
             return log_likelihood 
 
         # if isinstance(self.dynamics, obs.AutoRegressiveObservations) and isinstance(self.emissions, emssn.GaussianEmissions) and self.K==1:
-        if n_samples==1:
+        if n_samples==1 and self.K==1 and self.M==0:
             return estimate_complete_data_log_likelihood() + variational_posterior.entropy() 
         else:
             return estimate_expected_log_joint(n_samples) + variational_posterior.entropy()
