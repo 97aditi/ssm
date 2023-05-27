@@ -113,9 +113,6 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
 
     # get the dimension of the latent space 
     d_e = int(dynamics_dales_constraint*latent_space_dim)
-    # print latent space dimension an d_e
-    print("latent space dimension: ", latent_space_dim)
-    print("d_e: ", d_e)
 
     W = cp.Variable((ExyT_known.shape[1], ExxT.shape[0]))
     W.value = initial_C
@@ -135,7 +132,7 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
     objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExxT) - 2*cp.trace(R_inv@W@ExyT_known))
     # solve the problems
     prob = cp.Problem(objective, constraints)
-    prob.solve(solver=cp.MOSEK, verbose=True, warm_start=True,)
+    prob.solve(solver=cp.MOSEK, verbose=False, warm_start=True,)
     # check if the problem is solved
     if prob.status != 'optimal':
         print("Warning: M step for C failed to converge!")
@@ -243,6 +240,7 @@ def fit_linear_regression(Xs, ys,
 
     # Solve for the MAP estimate
     if block_diagonal>0:
+        ExxT = ExxT + prior_ExxT
         W_full = solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, current_etas, dynamics_dales_constraint, infer_sign, latent_space_dim)
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T

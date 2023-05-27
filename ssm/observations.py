@@ -1201,8 +1201,8 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 constraints.append(W[:,d_e:D]<=0)
                 # get the inverse of Sigma
                 Q_inv = np.linalg.inv(self.Sigmas[k])
-                # check if the inverse is correct
-                assert np.allclose(self.Sigmas[k]@Q_inv, np.eye(D)), "Inverse of Sigma failed"
+                # let's normalize Q_inv by its max absolute value
+                Q_inv = Q_inv/np.max(np.abs(Q_inv))
                 # perform a cholesky decomposition
                 L = np.linalg.cholesky(Q_inv)
                 # check if the cholesky decomposition is successful
@@ -1212,7 +1212,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs[k]+self.h0[k])))
                 # solve the problem
                 prob = cp.Problem(objective, constraints)
-                prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True,)
+                prob.solve(solver = cp.MOSEK, verbose = True, warm_start = True,)
                 # check if the problem is solved
                 if prob.status != 'optimal':
                     print("Warning: M step for A failed to converge!")
