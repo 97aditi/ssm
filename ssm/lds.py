@@ -1143,7 +1143,7 @@ class LDS(SLDS):
         Q = self.dynamics.Sigmas[0]
         R = inv_etas[0]
 
-        mu0 = self.dynamics.mu_init[0] 
+        mu0 = bs[0]
         S0 = self.dynamics.Sigmas_init[0]
 
         ll = 0
