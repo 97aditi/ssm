@@ -1185,31 +1185,34 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 assert lags==1, "Only lags==1 is supported for now"
                 # add constraints on the dynamics vector
                 constraints = []
-                # d_e = int(dynamics_dales_constraint*D)
-                # # put constraints on the first d_e columns of W matrix, except the diagonal elements
-                # for i in range(d_e):
-                #     for j in range(D):
-                #         if i!=j:
-                #             constraints.append(W[j,i]>=0)
-                # # put constraints on the last D-d_e columns of W matrix, except the diagonal elements
-                # for i in range(d_e,D):
-                #     for j in range(D):
-                #         if i!=j:
-                #             constraints.append(W[j,i]<=0)
                 d_e = int(dynamics_dales_constraint*D)
-                constraints.append(W[:,:d_e]>=0)
-                constraints.append(W[:,d_e:D]<=0)
+                # put constraints on the first d_e columns of W matrix, except the diagonal elements
+                for i in range(d_e):
+                    for j in range(D):
+                        if i!=j:
+                            constraints.append(W[j,i]>=0)
+                # put constraints on the last D-d_e columns of W matrix, except the diagonal elements
+                for i in range(d_e,D):
+                    for j in range(D):
+                        if i!=j:
+                            constraints.append(W[j,i]<=0)
+                # d_e = int(dynamics_dales_constraint*D)
+                # constraints.append(W[:,:d_e]>=0)
+                # constraints.append(W[:,d_e:D]<=0)
                 # get the inverse of Sigma
                 Q_inv = np.linalg.inv(self.Sigmas[k])
                 # let's normalize Q_inv by its max absolute value
                 Q_inv = Q_inv/np.max(np.abs(Q_inv))
+                # let's also normalize by the number of samples and time points
+                normalizer = len(datas)*datas[0].shape[0]
                 # perform a cholesky decomposition
                 L = np.linalg.cholesky(Q_inv)
                 # check if the cholesky decomposition is successful
                 assert np.allclose(L@L.T, Q_inv), "Cholesky decomposition failed"
-                kron_ExuxuTs = np.kron((ExuxuTs[k]+self.J0[k]).T, np.eye(D))
+                kron_ExuxuTs = np.kron((ExuxuTs[k]+self.J0[k]).T, np.eye(D))/normalizer
+                sum_ExuyTs = (ExuyTs[k]+self.h0[k])/normalizer
                 # define the objective function
-                objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs[k]+self.h0[k])))
+                objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(sum_ExuyTs)))
                 # solve the problem
                 prob = cp.Problem(objective, constraints)
                 prob.solve(solver = cp.MOSEK, verbose = True, warm_start = True,)
