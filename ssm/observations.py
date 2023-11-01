@@ -1212,7 +1212,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs[k]+self.h0[k])))
                 # solve the problem
                 prob = cp.Problem(objective, constraints)
-                prob.solve(solver = cp.MOSEK, verbose = True, warm_start = True,)
+                prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True,)
                 # check if the problem is solved
                 if prob.status != 'optimal':
                     print("Warning: M step for A failed to converge!")
