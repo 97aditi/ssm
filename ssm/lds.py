@@ -844,6 +844,13 @@ class SLDS(object):
         """
         elbos = [self._laplace_em_elbo(variational_posterior, datas, inputs, masks, tags, n_samples=num_samples)]
 
+        if self.K==1:
+            lls = [self.log_likelihood(datas, inputs, masks, tags)]
+        else:
+            lls = []
+
+        print('fitting laplace em model')
+
         pbar = ssm_pbar(num_iters, verbose, "ELBO: {:.1f}", [elbos[-1]])
 
         for itr in pbar:
@@ -864,10 +871,21 @@ class SLDS(object):
 
             elbos.append(self._laplace_em_elbo(
                 variational_posterior, datas, inputs, masks, tags, n_samples=num_samples))
+            
+            if self.K==1:
+                lls.append(self.log_likelihood(datas, inputs, masks, tags))
+                # check if LL has decreased
+                if lls[-1] < lls[-2]:
+                    print("WARNING: LL has decreased by {} at iteration {}".format(lls[-2]-lls[-1], itr))
+            
+            # check if ELBO has decreased
+            if elbos[-1] < elbos[-2]:
+                print("WARNING: ELBO has decreased by {} at iteration {}".format(elbos[-2]-elbos[-1], itr))
+
             if verbose == 2:
               pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
 
-        return np.array(elbos)
+        return np.array(elbos), np.array(lls)
 
     def _make_variational_posterior(self, variational_posterior, datas, inputs, masks, tags, method, **variational_posterior_kwargs):
         # Initialize the variational posterior
@@ -986,10 +1004,10 @@ class SLDS(object):
             posterior, datas, inputs, masks, tags, verbose,
             learning=False, **dynamics_kwargs, **emission_kwargs, num_iters=1, num_samples=1)
 
-        elbos = _fitting_methods[method](
+        elbos, lls = _fitting_methods[method](
             posterior, datas, inputs, masks, tags, verbose,
             learning=True, **dynamics_kwargs, **emission_kwargs, **kwargs)
-        return elbos, posterior
+        return elbos, lls, posterior
 
     @ensure_args_are_lists
     def approximate_posterior(self, datas, inputs=None, masks=None, tags=None,
@@ -1147,7 +1165,6 @@ class LDS(SLDS):
         S0 = self.dynamics.Sigmas_init[0]
 
         ll = 0
-        # TODO: not accounting for dynamic bias bs
         for data, input in zip(datas, inputs):
             # accounting for observation bias by subtracting ds[0]
             ll_this, _, _ = kalman_filter(mu0, S0, As[0], Vs[0], Q, Cs[0], Fs[0], R, input, data-ds[0])
