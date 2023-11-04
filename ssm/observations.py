@@ -1164,6 +1164,11 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         dynamics_dales_constraint = kwargs.get('dynamics_dales_constraint', False)
 
         for k in range(K):
+            ExuxuTs_k = ExuxuTs[k][:D*lags+M, :D*lags+M]
+            ExuyTs_k = ExuyTs[k][:D*lags+M]
+            self.J0_k = self.J0[k][:D*lags+M, :D*lags+M]
+            self.h0_k = self.h0[k][:D*lags+M]
+
             if dynamics_dales_constraint>0:      
                 # this contains the fraction of positive columns in the dynamics matrix
                 assert lags==1, "Only lags==1 is supported for now" 
@@ -1171,13 +1176,12 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 """ Here we used cvxpy to solve the linear regression problem"""
 
                 # modifying this to cvxpy so as to put dale's law
-                W = cp.Variable((D,(D*lags+M+1)))
+                W = cp.Variable((D,(D*lags+M)))
                 # initialize W to the dynamics matrix
-                W_inital = np.zeros((D, D*lags+M+1))
+                W_inital = np.zeros((D, D*lags+M))
                 W_inital[:D,:D*lags] = self.As[k]
                 if M>0:
                     W_inital[:D,D*lags:D*lags+M] = self.Vs[k]
-                W_inital[:,-1] = self.bs[k]
                 W.value = W_inital
 
                 # put dales law constraints on A
@@ -1209,10 +1213,9 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 L = np.linalg.cholesky(Q_inv)
                 # check if the cholesky decomposition is successful
                 assert np.allclose(L@L.T, Q_inv), "Cholesky decomposition failed"
-                kron_ExuxuTs = np.kron((ExuxuTs[k]+self.J0[k]).T, np.eye(D))/normalizer
-                sum_ExuyTs = (ExuyTs[k]+self.h0[k])/normalizer
+                kron_ExuxuTs = np.kron((ExuxuTs_k+self.J0_k).T, np.eye(D))
                 # define the objective function
-                objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(sum_ExuyTs)))
+                objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs_k+self.h0_k)))
                 # solve the problem
                 prob = cp.Problem(objective, constraints)
                 prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True,)
@@ -1222,15 +1225,15 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 # print the value of the objective function 
                 Wk = W.value
             else:
-                Wk = np.linalg.solve(ExuxuTs[k] + self.J0[k], ExuyTs[k] + self.h0[k]).T
+                Wk = np.linalg.solve(ExuxuTs_k + self.J0_k, ExuyTs_k + self.h0_k).T
                 
             As[k] = Wk[:, :D * lags]
-            Vs[k] = Wk[:, D * lags:-1]
-            bs[k] = Wk[:, -1]
+            Vs[k] = Wk[:, D * lags:D*lags+M]
+            bs[k] = np.zeros(D) 
 
             # Solve for the MAP estimate of the covariance
-            EWxyT =  Wk @ ExuyTs[k]
-            sqerr = EyyTs[k] - EWxyT.T - EWxyT + Wk @ ExuxuTs[k] @ Wk.T
+            EWxyT =  Wk @ ExuyTs_k
+            sqerr = EyyTs[k] - EWxyT.T - EWxyT + Wk @ ExuxuTs_k @ Wk.T
             nu = self.nu0 + Ens[k]
             Sigmas[k] = (sqerr + self.Psi0) / (nu + D + 1)
 
