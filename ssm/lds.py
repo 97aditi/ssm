@@ -730,95 +730,9 @@ class SLDS(object):
                     exp_log_joint += np.sum(Ezzp1 * log_Ps)
                     exp_log_joint += np.sum(Ez * log_likes)
             return exp_log_joint / n_samples
-        
-        def estimate_complete_data_log_likelihood():
-            """ Estimate the complete data log likelihood for Gaussian LDS"""
-            assert isinstance(self.dynamics, obs.AutoRegressiveObservations), "only implemented for Gaussian LDS"
-            assert isinstance(self.emissions, emssn.GaussianEmissions), "only implemented for Gaussian LDS"
-            assert self.K==1, "only implemented for K=1"
-
-            # get the current model parameters
-            As, bs, Bs, _ = self.dynamics.params
-            Cs, Fs, ds, inv_etas = self.emissions.params
-
-            # append the bias to the dynamics
-            A = np.concatenate((As[0], bs[0][:,None], Bs[0]), axis=1)
-            C = np.concatenate((Cs[0], ds[0][:,None], Fs[0]), axis=1)
-
-            # obtain covariances and their inverses
-            Q = self.dynamics.Sigmas[0]
-            R = inv_etas[0]
-            Q_inv = np.linalg.inv(Q)
-            R_inv = np.linalg.inv(R)
-
-            ll_dynamics = 0
-            ll_observations = 0
-
-            # now ompute them usin smoothed means and covariances
-            continuous_expectations = variational_posterior.continuous_expectations
-            for (_, Ex, smoothed_sigmas, ExxnT), data, input in zip(continuous_expectations, datas, inputs):
-
-                # compute the sufficient statistics for the continuous states
-                ExxnT_intercept = np.zeros((self.D+1+self.M, self.D))
-                ExxnT_intercept[:self.D, :self.D] = np.sum(ExxnT, axis=0)
-                ExxnT_intercept[self.D, :self.D] = np.sum(Ex[1:], axis=0)
-                # TODO: make sure we want to go ahead with u_{t+1}, rather than u_t
-                if self.M>0:
-                    ExxnT_intercept[self.D+1:self.D+1+self.M, :self.D] = np.sum(np.einsum('ti,tj->tij',input[1:], Ex[1:]), axis=0)
-
-                ExyT_intercept = np.zeros((self.D+1+self.M, self.N))
-                ExyT_intercept[:self.D,] = np.sum(np.einsum('ti,tj->tij',Ex, data), axis=0)
-                ExyT_intercept[self.D,:] = np.sum(data, axis=0)
-                # now include the input term
-                if self.M>0:
-                    ExyT_intercept[self.D+1:self.D+1+self.M,:] = np.sum(np.einsum('ti,tj->tij',input, data), axis=0)
-
-                EyyT = np.sum(np.einsum('ti,tj->tij',data, data), axis=0)
-                
-                mumuT = np.einsum('ti,tj->tij',Ex, Ex) + smoothed_sigmas
-                ExxT_2T = np.sum(mumuT[1:], axis=0)
-
-                ExxT_intercept_1T_1 = np.zeros((self.D+1+self.M, self.D+1+self.M))
-                ExxT_intercept_1T_1[:self.D,:self.D] = np.sum(mumuT[:-1], axis=0)
-                ExxT_intercept_1T_1[self.D,:self.D] = np.sum(Ex[:-1], axis=0)
-                ExxT_intercept_1T_1[:self.D,self.D] = np.sum(Ex[:-1], axis=0)
-                ExxT_intercept_1T_1[self.D,self.D] = data.shape[0]-1
-                # now incoporating inputs
-                if self.M>0:
-                    ExxT_intercept_1T_1[self.D+1:self.D+1+self.M,:self.D] = np.sum(np.einsum('ti,tj->tij',input[1:], Ex[:-1]), axis=0)
-                    ExxT_intercept_1T_1[:self.D,self.D+1:self.D+1+self.M] = np.sum(np.einsum('ti,tj->tij',input[1:], Ex[:-1]), axis=0).T
-                    ExxT_intercept_1T_1[self.D+1:self.D+1+self.M,self.D+1:self.D+1+self.M] = np.sum(np.einsum('ti,tj->tij',input[1:], input[1:]), axis=0)
-                    ExxT_intercept_1T_1[self.D+1:self.D+1+self.M,self.D] = np.sum(input[1:], axis=0)
-                    ExxT_intercept_1T_1[self.D,self.D+1:self.D+1+self.M] = np.sum(input[1:], axis=0)
-
-                ExxT_intercept = np.zeros((self.D+1+self.M, self.D+1+self.M))
-                ExxT_intercept[:self.D,:self.D] = np.sum(mumuT, axis=0)
-                ExxT_intercept[self.D,:self.D] = np.sum(Ex, axis=0)
-                ExxT_intercept[:self.D,self.D] = np.sum(Ex, axis=0)
-                ExxT_intercept[self.D,self.D] = data.shape[0]
-                # now incoporating inputs
-                if self.M>0:
-                    ExxT_intercept[self.D+1:self.D+1+self.M,:self.D] = np.sum(np.einsum('ti,tj->tij',input, Ex), axis=0)
-                    ExxT_intercept[:self.D,self.D+1:self.D+1+self.M] = np.sum(np.einsum('ti,tj->tij',input, Ex), axis=0).T
-                    ExxT_intercept[self.D+1:self.D+1+self.M,self.D+1:self.D+1+self.M] = np.sum(np.einsum('ti,tj->tij',input, input), axis=0)
-                    ExxT_intercept[self.D+1:self.D+1+self.M,self.D] = np.sum(input, axis=0)
-                    ExxT_intercept[self.D,self.D+1:self.D+1+self.M] = np.sum(input, axis=0)
-
-                # now compute the log likelihood
-                ll_dynamics += -0.5*np.trace(Q_inv@ExxT_2T) + np.trace(Q_inv@A@ExxnT_intercept) -0.5*np.trace(Q_inv@A@ExxT_intercept_1T_1@A.T) \
-                      - 0.5*(data.shape[0]-1)*np.linalg.slogdet(2*np.pi*Q)[1]
-                ll_observations += -0.5*np.trace(R_inv@EyyT) + np.trace(R_inv@C@ExyT_intercept) -0.5*np.trace(R_inv@C@ExxT_intercept@C.T) \
-                    - 0.5*data.shape[0]*np.linalg.slogdet(2*np.pi*R)[1]
-
-            log_likelihood = ll_observations + ll_dynamics + self.log_prior()
-
-            return log_likelihood 
 
         # if isinstance(self.dynamics, obs.AutoRegressiveObservations) and isinstance(self.emissions, emssn.GaussianEmissions) and self.K==1:
-        if n_samples==1:
-            return estimate_complete_data_log_likelihood() + variational_posterior.entropy() 
-        else:
-            return estimate_expected_log_joint(n_samples) + variational_posterior.entropy()
+        return estimate_expected_log_joint(n_samples) + variational_posterior.entropy()
 
     def _fit_laplace_em(self, variational_posterior, datas,
                         inputs=None, masks=None, tags=None,
@@ -842,7 +756,13 @@ class SLDS(object):
         and that we update q(x) via Laplace approximation.
         Assume q(z) is a chain-structured discrete graphical model.
         """
-        elbos = [self._laplace_em_elbo(variational_posterior, datas, inputs, masks, tags, n_samples=num_samples)]
+        
+        if self.K==1:
+            elbos = [self.log_probability(datas, inputs, masks, tags)]
+        else:
+            elbos = [self._laplace_em_elbo(variational_posterior, datas, inputs, masks, tags, n_samples=num_samples)]
+
+        print('fitting laplace em model')
 
         pbar = ssm_pbar(num_iters, verbose, "ELBO: {:.1f}", [elbos[-1]])
 
@@ -861,9 +781,16 @@ class SLDS(object):
             if learning:
                 self._fit_laplace_em_params_update(
                     variational_posterior, datas, inputs, masks, tags,  emission_optimizer, emission_optimizer_maxiter, alpha, dynamics_dales_constraint, emission_block_diagonal, infer_sign)
-
-            elbos.append(self._laplace_em_elbo(
+            
+            if self.K==1:
+                elbos.append(self.log_probability(datas, inputs, masks, tags))
+                # check if LP has decreased
+                if elbos[-1] < elbos[-2]:
+                    print("WARNING: LP has decreased by {} at iteration {}".format(lps[-2]-lps[-1], itr))
+            else:
+                elbos.append(self._laplace_em_elbo(
                 variational_posterior, datas, inputs, masks, tags, n_samples=num_samples))
+    
             if verbose == 2:
               pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
 
@@ -1133,24 +1060,20 @@ class LDS(SLDS):
 
     @ensure_args_are_lists
     def log_likelihood(self, datas, inputs=None, masks=None, tags=None):
-        # let's compute the log likelihood of the data 
-
         # get the current model parameters
-        As, bs, Vs, _ = self.dynamics.params
-        Cs, Fs, ds, inv_etas = self.emissions.params
+        As, _, Vs, _ = self.dynamics.params
+        Cs, Fs, _, inv_etas = self.emissions.params
 
         # obtain covariances and their inverses
         Q = self.dynamics.Sigmas[0]
         R = inv_etas[0]
 
-        mu0 = bs[0]
+        mu0 = self.dynamics.mu_init[0]
         S0 = self.dynamics.Sigmas_init[0]
 
         ll = 0
-        # TODO: not accounting for dynamic bias bs
         for data, input in zip(datas, inputs):
-            # accounting for observation bias by subtracting ds[0]
-            ll_this, _, _ = kalman_filter(mu0, S0, As[0], Vs[0], Q, Cs[0], Fs[0], R, input, data-ds[0])
+            ll_this, _, _ = kalman_filter(mu0, S0, As[0], Vs[0], Q, Cs[0], Fs[0], R, input, data)
             ll += ll_this
         
         return ll 
