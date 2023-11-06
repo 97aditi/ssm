@@ -90,7 +90,7 @@ def solve_regression_for_unknown_cells(ExxT, ExyT, fit_intercept, initial_C, eta
     # let's return the emission matrix
     return C_unknown
             
-def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_dales_constraint, infer_sign, latent_space_dim):
+def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_dales_constraint, infer_sign, latent_space_dim, normalizer):
     """ learn the emission matrix C with block-sparse constraints"""
 
     # let's get the indices of the excitatory and inhibitory cells
@@ -127,12 +127,17 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
     # Let's scale R_inv by max_abs, to keep the problem bounded and avoid numerical issues; it doesn' affect the solution per se
     R_inv = R_inv/max_abs
     L = np.linalg.cholesky(R_inv)
-    kron_ExxT = np.kron(ExxT, np.eye(ExyT_known.shape[1]))
+    kron_ExxT = np.kron(ExxT, np.eye(ExyT_known.shape[1]))/normalizer
+    ExyT_known = ExyT_known/normalizer
+    # let's print norms of all matrices
+    print("R_inv: "+str(np.linalg.norm(R_inv)))
+    print("kron_ExxT: "+str(np.linalg.norm(kron_ExxT)))
+    print("ExyT_known: "+str(np.linalg.norm(ExyT_known)))
     # add the objective function
     objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExxT) - 2*cp.trace(R_inv@W@ExyT_known))
     # solve the problems
     prob = cp.Problem(objective, constraints)
-    prob.solve(solver=cp.MOSEK, verbose=False, warm_start=True,)
+    prob.solve(solver=cp.MOSEK, verbose=True, warm_start=True,)
     # check if the problem is solved
     if prob.status != 'optimal':
         print("Warning: M step for C failed to converge!")
@@ -238,10 +243,12 @@ def fit_linear_regression(Xs, ys,
     # let's check if we have unknown cells, in which case we will force sigma to be diagonal
     unknown_cells = np.where(infer_sign==0)[0]
 
+    normalizer = len(ys)*ys[0].shape[0]
+
     # Solve for the MAP estimate
     if block_diagonal>0:
         ExxT = ExxT + prior_ExxT
-        W_full = solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, current_etas, dynamics_dales_constraint, infer_sign, latent_space_dim)
+        W_full = solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, current_etas, dynamics_dales_constraint, infer_sign, latent_space_dim, normalizer)
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T
         
