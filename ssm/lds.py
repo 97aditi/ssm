@@ -784,7 +784,7 @@ class SLDS(object):
                 elbos.append(self.log_probability(datas, inputs, masks, tags))
                 # check if LP has decreased
                 if elbos[-1] < elbos[-2]:
-                    print("WARNING: LP has decreased by {} at iteration {}".format(lps[-2]-lps[-1], itr))
+                    print("WARNING: LP has decreased by {} at iteration {}".format(elbos[-2]-elbos[-1], itr))
             else:
                 elbos.append(self._laplace_em_elbo(
                 variational_posterior, datas, inputs, masks, tags, n_samples=num_samples))
@@ -792,7 +792,7 @@ class SLDS(object):
             if verbose == 2:
               pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
 
-        return np.array(elbos), np.array(lls)
+        return np.array(elbos)
 
     def _make_variational_posterior(self, variational_posterior, datas, inputs, masks, tags, method, **variational_posterior_kwargs):
         # Initialize the variational posterior
@@ -911,7 +911,7 @@ class SLDS(object):
             posterior, datas, inputs, masks, tags, verbose,
             learning=False, **dynamics_kwargs, **emission_kwargs, num_iters=1, num_samples=1)
 
-        elbos, lls = _fitting_methods[method](
+        elbos = _fitting_methods[method](
             posterior, datas, inputs, masks, tags, verbose,
             learning=True, **dynamics_kwargs, **emission_kwargs, **kwargs)
         return elbos, lls, posterior

@@ -129,15 +129,15 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
     L = np.linalg.cholesky(R_inv)
     kron_ExxT = np.kron(ExxT, np.eye(ExyT_known.shape[1]))/normalizer
     ExyT_known = ExyT_known/normalizer
-    # let's print norms of all matrices
-    print("R_inv: "+str(np.linalg.norm(R_inv)))
-    print("kron_ExxT: "+str(np.linalg.norm(kron_ExxT)))
-    print("ExyT_known: "+str(np.linalg.norm(ExyT_known)))
+    # # let's print norms of all matrices
+    # print("R_inv: "+str(np.linalg.norm(R_inv)))
+    # print("kron_ExxT: "+str(np.linalg.norm(kron_ExxT)))
+    # print("ExyT_known: "+str(np.linalg.norm(ExyT_known)))
     # add the objective function
     objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExxT) - 2*cp.trace(R_inv@W@ExyT_known))
     # solve the problems
     prob = cp.Problem(objective, constraints)
-    prob.solve(solver=cp.MOSEK, verbose=True, warm_start=True,)
+    prob.solve(solver=cp.MOSEK, verbose=False, warm_start=True,)
     # check if the problem is solved
     if prob.status != 'optimal':
         print("Warning: M step for C failed to converge!")

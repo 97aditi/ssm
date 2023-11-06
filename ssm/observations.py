@@ -1190,19 +1190,19 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 # add constraints on the dynamics vector
                 constraints = []
                 d_e = int(dynamics_dales_constraint*D)
-                # put constraints on the first d_e columns of W matrix, except the diagonal elements
-                for i in range(d_e):
-                    for j in range(D):
-                        if i!=j:
-                            constraints.append(W[j,i]>=0)
-                # put constraints on the last D-d_e columns of W matrix, except the diagonal elements
-                for i in range(d_e,D):
-                    for j in range(D):
-                        if i!=j:
-                            constraints.append(W[j,i]<=0)
+                # # put constraints on the first d_e columns of W matrix, except the diagonal elements
+                # for i in range(d_e):
+                #     for j in range(D):
+                #         if i!=j:
+                #             constraints.append(W[j,i]>=0)
+                # # put constraints on the last D-d_e columns of W matrix, except the diagonal elements
+                # for i in range(d_e,D):
+                #     for j in range(D):
+                #         if i!=j:
+                #             constraints.append(W[j,i]<=0)
                 # d_e = int(dynamics_dales_constraint*D)
-                # constraints.append(W[:,:d_e]>=0)
-                # constraints.append(W[:,d_e:D]<=0)
+                constraints.append(W[:,:d_e]>=0)
+                constraints.append(W[:,d_e:D]<=0)
                 # get the inverse of Sigma
                 Q_inv = np.linalg.inv(self.Sigmas[k])
                 # let's normalize Q_inv by its max absolute value
