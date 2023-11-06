@@ -121,7 +121,9 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
     constraints = [W[new_e_cells,:][:,:d_e]>=0, W[new_e_cells,:][:,d_e:latent_space_dim]==0, W[new_i_cells, :][:,(latent_space_dim-d_e):latent_space_dim]>=0, \
                    W[new_i_cells, :][:, :(latent_space_dim-d_e)]==0]
 
-    R_inv = np.linalg.inv(etas)[np.concatenate((e_cells, i_cells)), :][:, np.concatenate((e_cells, i_cells)),]
+    # TODO: this probably doesn't work for unknown cells
+    assert len(unknown_cells)==0, "M step currently does not work for unknown cells"
+    R_inv = np.linalg.inv(etas)
     # let's find the maximum absolute value of an element in R_inv
     max_abs = np.max(np.abs(R_inv))
     # Let's scale R_inv by max_abs, to keep the problem bounded and avoid numerical issues; it doesn' affect the solution per se

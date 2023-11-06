@@ -914,7 +914,7 @@ class SLDS(object):
         elbos = _fitting_methods[method](
             posterior, datas, inputs, masks, tags, verbose,
             learning=True, **dynamics_kwargs, **emission_kwargs, **kwargs)
-        return elbos, lls, posterior
+        return elbos, posterior
 
     @ensure_args_are_lists
     def approximate_posterior(self, datas, inputs=None, masks=None, tags=None,

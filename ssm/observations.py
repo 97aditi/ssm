@@ -1207,8 +1207,6 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 Q_inv = np.linalg.inv(self.Sigmas[k])
                 # let's normalize Q_inv by its max absolute value
                 Q_inv = Q_inv/np.max(np.abs(Q_inv))
-                # let's also normalize by the number of samples and time points
-                normalizer = len(datas)*datas[0].shape[0]
                 # perform a cholesky decomposition
                 L = np.linalg.cholesky(Q_inv)
                 # check if the cholesky decomposition is successful
