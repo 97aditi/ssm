@@ -1003,14 +1003,14 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
     def log_prior(self,):
         log_prior = 0
         for k in range(self.K):
-            # conctenate A, V, b
+            # conctenate A, V, (not fitting b anymore)
             if self.M>0:
-                A = np.hstack((self.As[k], self.Vs[k], self.bs[k][:, None]))
+                A = np.hstack((self.As[k], self.Vs[k]))
             else:
-                A = np.hstack((self.As[k], self.bs[k][:, None]))
+                A = self.As[k]
             # invert J0
-            inv_J = np.diag(1/np.diag(self.J0[k]))
-            mu = inv_J@self.h0[k]
+            inv_J = np.diag(1/np.diag(self.J0[k][:-1]))
+            mu = inv_J@(self.h0[k][:-1,:])
             for i in range(self.D):
                 log_prior += stats.multivariate_normal_logpdf(A[i].ravel(), mu[:,i].ravel(), inv_J)
             log_prior += invwishart.logpdf(self.Sigmas[k], self.nu0+self.D+1, self.Psi0)
