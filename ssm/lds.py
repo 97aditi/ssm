@@ -671,10 +671,7 @@ class SLDS(object):
             self.dynamics.m_step(**kwargs)
             self.dynamics.params = convex_combination(curr_prms, self.dynamics.params, alpha)
 
-        # compute LL
-        elbo_postA = self.log_probability(datas, inputs, masks, tags)
         # Update emissions params. This is always approximate (at least for now).
-   
         if emission_block_diagonal>0:
             # only allowed for gaussian emissions 
             assert isinstance(self.emissions, emssn.GaussianEmissions), "emission_block_diagonal only allowed for GaussianEmissions"
@@ -697,7 +694,6 @@ class SLDS(object):
                                 maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
                                 dynamics_dales_constraint = dynamics_dales_constraint,)
             self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
-        return elbo_postA
 
     def _laplace_em_elbo(self,
                          variational_posterior,
@@ -778,11 +774,9 @@ class SLDS(object):
                 variational_posterior, datas, inputs, masks, tags,
                 continuous_optimizer, continuous_tolerance, continuous_maxiter)   
             
-            elbo_now = self.log_probability(datas, inputs, masks, tags)
-
             # Update parameters
             if learning:
-                elbo_postA = self._fit_laplace_em_params_update(
+                self._fit_laplace_em_params_update(
                     variational_posterior, datas, inputs, masks, tags,  emission_optimizer, emission_optimizer_maxiter, alpha, dynamics_dales_constraint, emission_block_diagonal, infer_sign)
             
             if self.K==1:
@@ -790,13 +784,10 @@ class SLDS(object):
                 # check if LP has decreased
                 if elbos[-1] < elbos[-2]:
                     print("WARNING: LP has decreased by {} at iteration {}".format(elbos[-2]-elbos[-1], itr))
-                    # let's check where it decreased exactly:
-                    if elbos[-2]>elbo_now:
-                        print("Lp decreased due to E step by {} at iteration {}".format(elbo_now-elbos[-2], itr))
-                    if elbo_now>elbo_postA:
-                        print("Lp decreased due to M step of dynamics by {} at iteration {}".format(elbo_postA-elbo_now, itr))
-                    if elbo_postA>elbos[-1]:
-                        print("Lp decreased due to M step of emissions by {} at iteration {}".format(elbos[-1]-elbo_postA, itr))
+                # check for convergence
+                if np.abs(elbos[-1] - elbos[-2]) < 1e-3:
+                    print("Converged at iteration {}".format(itr))
+                    break
             else:
                 elbos.append(self._laplace_em_elbo(
                 variational_posterior, datas, inputs, masks, tags, n_samples=num_samples))

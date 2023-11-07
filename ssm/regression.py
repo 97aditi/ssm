@@ -255,14 +255,15 @@ def fit_linear_regression(Xs, ys,
             Sigma = (expected_err + Psi0 * np.eye(d)) / (nu + d + 1)
             
             # check convergence
-            if np.allclose(W_full, initial_C, atol=0, rtol=1e-3):
+            if np.linalg.norm(W_full-initial_C)/np.linalg.norm(W_full)<1e-3:    
                 print('M step for C converged in '+str(i+1)+' iterations.')
                 break
             else:
                 initial_C = W_full
                 current_etas = Sigma
-                if i==(max_iters-1):
-                    print('M step for C did not converge in '+str(i+1)+'  iterations.')
+
+            if i==(max_iters-1):
+                print('M step for C did not converge in '+str(i+1)+'  iterations.')
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T
         

@@ -1128,6 +1128,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 x0 = Ex[0].reshape((D, 1))
                 self.Sigmas_init[k] = ExxT[0] + self.Vs[k]@u0@u0.T@self.Vs[k].T - self.Vs[k]@u0@x0.T - x0@u0.T@self.Vs[k].T
 
+
         # Symmetrize the expectations
         for k in range(K):
             ExuxuTs[k, D:D + M, :D] = ExuxuTs[k, :D, D:D + M].T
@@ -1234,7 +1235,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                     Sigmas[k] = (sqerr + self.Psi0) / (nu + D + 1)
                 
                     # check for convergence
-                    if np.allclose(Wk, W_inital, atol=0, rtol=1e-3):
+                    if np.linalg.norm(Wk-W_inital)/np.linalg.norm(Wk)<1e-3:    
                         print("M step for A converged in {} iterations".format(i+1))
                         break
                     else:
