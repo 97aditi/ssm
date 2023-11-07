@@ -243,20 +243,25 @@ def fit_linear_regression(Xs, ys,
     normalizer = len(ys)*ys[0].shape[0]
     # Solve for the MAP estimate
     if block_diagonal>0:
-        for i in range(10):
+        max_iters = 10
+        for i in range(max_iters):
+            # update C
             ExxT = ExxT + prior_ExxT
             W_full = solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, current_etas, dynamics_dales_constraint, infer_sign, latent_space_dim, normalizer)
+            # update R
             expected_err = EyyT - W_full @ ExyT - ExyT.T @ W_full.T + W_full @ ExxT @ W_full.T
             nu = nu0 + weight_sum
             # Get MAP estimate of posterior covariance
             Sigma = (expected_err + Psi0 * np.eye(d)) / (nu + d + 1)
             
-            if np.linalg.norm(W_full-initial_C)<(1e-4*x_dim*d):
+            # check convergence
+            if np.allclose(W_full, initial_C, atol=0, rtol=1e-3):
                 print('M step for C converged in '+str(i+1)+' iterations.')
+                break
             else:
                 initial_C = W_full
                 current_etas = Sigma
-                if i==9:
+                if i==(max_iters-1):
                     print('M step for C did not converge in '+str(i+1)+'  iterations.')
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T
@@ -264,7 +269,6 @@ def fit_linear_regression(Xs, ys,
     # Compute expected error for covariance matrix estimate
     # E[(y - Ax)(y - Ax)^T]
     expected_err = EyyT - W_full @ ExyT - ExyT.T @ W_full.T + W_full @ ExxT @ W_full.T
-    
     nu = nu0 + weight_sum
     # Get MAP estimate of posterior covariance
     Sigma = (expected_err + Psi0 * np.eye(d)) / (nu + d + 1)
