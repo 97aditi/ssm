@@ -131,10 +131,6 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
     L = np.linalg.cholesky(R_inv)
     kron_ExxT = np.kron(ExxT, np.eye(ExyT_known.shape[1]))/normalizer
     ExyT_known = ExyT_known/normalizer
-    # # let's print norms of all matrices
-    # print("R_inv: "+str(np.linalg.norm(R_inv)))
-    # print("kron_ExxT: "+str(np.linalg.norm(kron_ExxT)))
-    # print("ExyT_known: "+str(np.linalg.norm(ExyT_known)))
     # add the objective function
     objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExxT) - 2*cp.trace(R_inv@W@ExyT_known))
     # solve the problems
@@ -244,13 +240,24 @@ def fit_linear_regression(Xs, ys,
 
     # let's check if we have unknown cells, in which case we will force sigma to be diagonal
     unknown_cells = np.where(infer_sign==0)[0]
-
     normalizer = len(ys)*ys[0].shape[0]
-
     # Solve for the MAP estimate
     if block_diagonal>0:
-        ExxT = ExxT + prior_ExxT
-        W_full = solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, current_etas, dynamics_dales_constraint, infer_sign, latent_space_dim, normalizer)
+        for i in range(10):
+            ExxT = ExxT + prior_ExxT
+            W_full = solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, current_etas, dynamics_dales_constraint, infer_sign, latent_space_dim, normalizer)
+            expected_err = EyyT - W_full @ ExyT - ExyT.T @ W_full.T + W_full @ ExxT @ W_full.T
+            nu = nu0 + weight_sum
+            # Get MAP estimate of posterior covariance
+            Sigma = (expected_err + Psi0 * np.eye(d)) / (nu + d + 1)
+            
+            if np.linalg.norm(W_full-initial_C)<(1e-4*x_dim*d):
+                print('M step for C converged in '+str(i+1)+' iterations.')
+            else:
+                initial_C = W_full
+                current_etas = Sigma
+                if i==9:
+                    print('M step for C did not converge in '+str(i+1)+'  iterations.')
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T
         
