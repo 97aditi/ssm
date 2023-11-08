@@ -1128,7 +1128,6 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 x0 = Ex[0].reshape((D, 1))
                 self.Sigmas_init[k] = ExxT[0] + self.Vs[k]@u0@u0.T@self.Vs[k].T - self.Vs[k]@u0@x0.T - x0@u0.T@self.Vs[k].T
 
-
         # Symmetrize the expectations
         for k in range(K):
             ExuxuTs[k, D:D + M, :D] = ExuxuTs[k, :D, D:D + M].T
@@ -1208,6 +1207,8 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                         for j in range(D):
                             if i!=j:
                                 constraints.append(W[j,i]<=0)
+                    # constraints.append(W[:,:d_e]>=0)
+                    # constraints.append(W[:,d_e:]<=0)
                     # get the inverse of Sigma
                     Q_inv = np.linalg.inv(self.Sigmas[k])
                     # let's normalize Q_inv by its max absolute value
@@ -1233,6 +1234,9 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                     sqerr = EyyTs[k] - EWxyT.T - EWxyT + Wk @ ExuxuTs_k @ Wk.T
                     nu = self.nu0 + Ens[k]
                     Sigmas[k] = (sqerr + self.Psi0) / (nu + D + 1)
+
+                    # check if Sigma is PSD
+                    assert np.all(np.linalg.eigvals(Sigmas[k]) > 0), "Sigma is not PSD in dynamics m step!"
                 
                     # check for convergence
                     if np.linalg.norm(Wk-W_inital)/np.linalg.norm(Wk)<1e-3:    

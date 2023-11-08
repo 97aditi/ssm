@@ -785,7 +785,7 @@ class SLDS(object):
                 if elbos[-1] < elbos[-2]:
                     print("WARNING: LP has decreased by {} at iteration {}".format(elbos[-2]-elbos[-1], itr))
                 # check for convergence
-                if np.abs(elbos[-1] - elbos[-2]) < 1e-3:
+                if np.abs(elbos[-1] - elbos[-2]) < 1e-4 and itr>5:
                     print("Converged at iteration {}".format(itr))
                     break
             else:

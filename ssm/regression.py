@@ -90,7 +90,7 @@ def solve_regression_for_unknown_cells(ExxT, ExyT, fit_intercept, initial_C, eta
     # let's return the emission matrix
     return C_unknown
             
-def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_dales_constraint, infer_sign, latent_space_dim, normalizer):
+def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_dales_constraint, infer_sign, latent_space_dim):
     """ learn the emission matrix C with block-sparse constraints"""
 
     # let's get the indices of the excitatory and inhibitory cells
@@ -121,7 +121,6 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
     constraints = [W[new_e_cells,:][:,:d_e]>=0, W[new_e_cells,:][:,d_e:latent_space_dim]==0, W[new_i_cells, :][:,(latent_space_dim-d_e):latent_space_dim]>=0, \
                    W[new_i_cells, :][:, :(latent_space_dim-d_e)]==0]
 
-    # TODO: this probably doesn't work for unknown cells
     assert len(unknown_cells)==0, "M step currently does not work for unknown cells"
     R_inv = np.linalg.inv(etas)
     # let's find the maximum absolute value of an element in R_inv
@@ -129,8 +128,7 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
     # Let's scale R_inv by max_abs, to keep the problem bounded and avoid numerical issues; it doesn' affect the solution per se
     R_inv = R_inv/max_abs
     L = np.linalg.cholesky(R_inv)
-    kron_ExxT = np.kron(ExxT, np.eye(ExyT_known.shape[1]))/normalizer
-    ExyT_known = ExyT_known/normalizer
+    kron_ExxT = np.kron(ExxT.T, np.eye(len(infer_sign)))
     # add the objective function
     objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExxT) - 2*cp.trace(R_inv@W@ExyT_known))
     # solve the problems
@@ -240,19 +238,21 @@ def fit_linear_regression(Xs, ys,
 
     # let's check if we have unknown cells, in which case we will force sigma to be diagonal
     unknown_cells = np.where(infer_sign==0)[0]
-    normalizer = len(ys)*ys[0].shape[0]
     # Solve for the MAP estimate
     if block_diagonal>0:
         max_iters = 10
         for i in range(max_iters):
             # update C
             ExxT = ExxT + prior_ExxT
-            W_full = solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, current_etas, dynamics_dales_constraint, infer_sign, latent_space_dim, normalizer)
+            W_full = solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, current_etas, dynamics_dales_constraint, infer_sign, latent_space_dim)
             # update R
             expected_err = EyyT - W_full @ ExyT - ExyT.T @ W_full.T + W_full @ ExxT @ W_full.T
             nu = nu0 + weight_sum
             # Get MAP estimate of posterior covariance
             Sigma = (expected_err + Psi0 * np.eye(d)) / (nu + d + 1)
+
+            # check if Sigma is PSD
+            assert np.all(np.linalg.eigvals(Sigma) > 0), "Sigma is not PSD in emissions m step!"
             
             # check convergence
             if np.linalg.norm(W_full-initial_C)/np.linalg.norm(W_full)<1e-3:    

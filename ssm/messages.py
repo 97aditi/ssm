@@ -500,12 +500,10 @@ def _kalman_filter(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
             Ct @ predicted_mus[t] + Dt @ us[t],
             Ct @ predicted_Sigmas[t] @ Ct.T + Rt
             )
-
         # Condition on this frame's observations
         _condition_on(predicted_mus[t], predicted_Sigmas[t],
             Ct, Dt, Rt, us[t], ys[t],
             filtered_mus[t], filtered_Sigmas[t])
-
         if t == T-1:
             break
 
@@ -751,12 +749,12 @@ def _kalman_filter_diagonal(mu0, S0, As, Bs, Qs, Cs, Ds, R_diags, us, ys):
             Ct @ predicted_mus[t] + Dt @ us[t],
             Ct, predicted_Sigmas[t], Rt
             )
-
+        
         # Condition on this frame's observations
         _condition_on_diagonal(predicted_mus[t], predicted_Sigmas[t],
             Ct, Dt, Rt, us[t], ys[t],
             filtered_mus[t], filtered_Sigmas[t])
-
+        
         if t == T-1:
             break
 
@@ -764,7 +762,6 @@ def _kalman_filter_diagonal(mu0, S0, As, Bs, Qs, Cs, Ds, R_diags, us, ys):
         _predict(filtered_mus[t], filtered_Sigmas[t],
             At, Bt, Qt, us[t],
             predicted_mus[t+1], predicted_Sigmas[t+1])
-
     return ll, filtered_mus, filtered_Sigmas
 
 
