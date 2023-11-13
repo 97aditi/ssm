@@ -502,7 +502,8 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                 infer_sign = infer_sign,
                 initial_C=initial_C, current_etas=self.inv_etas[0]) 
             self.Cs = CF[None, :, :self.D]
-            self.inv_etas = Sigma[None, :]
+            # get Sigma to be diagonal
+            self.inv_etas = np.diag(np.diag(Sigma[None, :]))
             self.Fs = np.zeros((1, self.N, self.M))
             self.ds = np.zeros((1, self.N))
         else:
@@ -529,7 +530,6 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             self.Cs = np.array(Cs)
             self.Fs = np.array(Fs)
             self.ds = np.array(ds)
-            # check if we have a singl
             self.inv_etas = np.array(inv_etas)
 
 
