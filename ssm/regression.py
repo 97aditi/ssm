@@ -240,7 +240,7 @@ def fit_linear_regression(Xs, ys,
     unknown_cells = np.where(infer_sign==0)[0]
     # Solve for the MAP estimate
     if block_diagonal>0:
-        max_iters = 10
+        max_iters = 20
         for i in range(max_iters):
             # update C
             ExxT = ExxT + prior_ExxT
