@@ -491,14 +491,14 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
 
         if self.single_subspace and all([np.all(mask) for mask in masks]):
             # Return exact m-step updates for C, F, d, and inv_etas
-            initial_C = self.Cs[0]
+            initial_C = np.hstack(([self.Cs[0], self.ds[0][:, None]]))
             # get expectations in right shape
             expectations = [ExxT[0], ExyT[0], EyyT[0], weight_sum]
             CF, d, Sigma = fit_linear_regression(
                 Xs, ys,
                 latent_space_dim=self.D,
                 expectations=expectations, 
-                fit_intercept=  True,
+                fit_intercept=True,
                 Psi0=self.Psi0[0], nu0=self.nu0[0],
                 prior_ExxT=1e-4 * np.eye(self.D+1),
                 prior_ExyT=np.zeros((self.D+1, self.N)), block_diagonal=block_diagonal,
@@ -506,8 +506,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                 infer_sign = infer_sign,
                 initial_C=initial_C, current_etas=self.inv_etas[0]) 
             self.Cs = CF[None, :, :self.D]
-            # get Sigma to be diagonal
-            self.inv_etas = np.diag(np.diag(Sigma[None, :]))
+            self.inv_etas =  Sigma[None, :]
             self.Fs = np.zeros((1, self.N, self.M))
             self.ds = d[None, :]
         else:
