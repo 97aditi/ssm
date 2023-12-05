@@ -1063,7 +1063,7 @@ class LDS(SLDS):
     def log_likelihood(self, datas, inputs=None, masks=None, tags=None):
         # get the current model parameters
         As, _, Vs, _ = self.dynamics.params
-        Cs, Fs, _, inv_etas = self.emissions.params
+        Cs, Fs, ds, inv_etas = self.emissions.params
 
         # obtain covariances and their inverses
         Q = self.dynamics.Sigmas[0]
@@ -1075,7 +1075,7 @@ class LDS(SLDS):
         ll = 0
         # TODO: not accounting for dynamic bias bs
         for data, input in zip(datas, inputs):
-            ll_this, _, _ = kalman_filter(mu0, S0, As[0], Vs[0], Q, Cs[0], Fs[0], R, input, data)
+            ll_this, _, _ = kalman_filter(mu0, S0, As[0], Vs[0], Q, Cs[0], Fs[0], R, input, data-ds[0])
             ll += ll_this
         
         return ll 

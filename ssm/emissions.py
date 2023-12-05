@@ -452,8 +452,8 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         M = self.M
 
         EyyT = np.zeros((K, self.N, self.N))
-        ExxT = np.zeros((K, self.D, self.D))
-        ExyT = np.zeros((K, self.D, self.N))
+        ExxT = np.zeros((K, self.D+1, self.D+1))
+        ExyT = np.zeros((K, self.D+1, self.N))
         weight_sum = 0
 
         weights = [np.ones(y.shape[0]) for y in ys]
@@ -465,8 +465,12 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                 # ExxT     
                 mumuT = np.einsum('ti,tj->tij',Ex, Ex) + smoothed_sigmas
                 ExxT[k, :self.D,:self.D] += np.einsum('t, tij->ij',w, mumuT)
+                ExxT[k, -1,:self.D] += np.einsum('t, ti->i',w, Ex)
+                ExxT[k, :self.D, -1] += np.einsum('t, ti->i',w, Ex)
+                ExxT[k, -1, -1] += np.sum(w)
                 # ExyT
                 ExyT[k, :self.D,:] += np.einsum('t,ti,tj->ij', w, Ex, y)
+                ExyT[k, -1,:] += np.einsum('t,ti->i', w, y)
                 weight_sum += np.sum(weight)
 
         ws = [Ez for (Ez, _, _) in discrete_expectations]
@@ -490,14 +494,14 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             initial_C = self.Cs[0]
             # get expectations in right shape
             expectations = [ExxT[0], ExyT[0], EyyT[0], weight_sum]
-            CF, Sigma = fit_linear_regression(
+            CF, d, Sigma = fit_linear_regression(
                 Xs, ys,
                 latent_space_dim=self.D,
                 expectations=expectations, 
-                fit_intercept=False,
+                fit_intercept=  True,
                 Psi0=self.Psi0[0], nu0=self.nu0[0],
-                prior_ExxT=1e-4 * np.eye(self.D),
-                prior_ExyT=np.zeros((self.D, self.N)), block_diagonal=block_diagonal,
+                prior_ExxT=1e-4 * np.eye(self.D+1),
+                prior_ExyT=np.zeros((self.D+1, self.N)), block_diagonal=block_diagonal,
                 dynamics_dales_constraint = dynamics_dales_constraint,  
                 infer_sign = infer_sign,
                 initial_C=initial_C, current_etas=self.inv_etas[0]) 
@@ -505,7 +509,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             # get Sigma to be diagonal
             self.inv_etas = np.diag(np.diag(Sigma[None, :]))
             self.Fs = np.zeros((1, self.N, self.M))
-            self.ds = np.zeros((1, self.N))
+            self.ds = d[None, :]
         else:
             Cs, Fs, ds, inv_etas = [], [], [], []
             for k in range(self.K):
