@@ -375,10 +375,10 @@ class _GaussianEmissionsMixin(object):
             self.inv_etas = self.inv_etas[perm]
 
     def log_likelihoods(self, data, input, mask, tag, x):
-        if mask is not None and np.any(~mask) and not isinstance(mus, np.ndarray):
-            raise Exception("Current implementation of multivariate_normal_logpdf for masked data"
-                            "does not work with autograd because it writes to an array. "
-                            "Use DiagonalGaussian instead if you need to support missing data.")
+        # if mask is not None and np.any(~mask) and not isinstance(mus, np.ndarray):
+        #     raise Exception("Current implementation of multivariate_normal_logpdf for masked data"
+        #                     "does not work with autograd because it writes to an array. "
+        #                     "Use DiagonalGaussian instead if you need to support missing data.")
 
         mus = self.forward(x, input, tag).reshape((-1, data.shape[0], self.N))
         Sigmas = self.inv_etas
@@ -477,17 +477,14 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
 
         block_diagonal = kwargs.get('emission_block_diagonal', False)
         dynamics_dales_constraint = kwargs.get('dynamics_dales_constraint', False)
-        # infer_sign should be an array containing +1 if the cells is E, -1 if the cells is I and 0 if unknown, when this is not given we assume that cells are sorted already
+        # infer_sign should be an array containing +1 if the cells is E, -1 if the cells \
+        # is I and 0 if unknown, when this is not given we assume that cells are sorted already
         known_sign = np.ones((self.N))
         known_sign[int(self.N*block_diagonal):] = -1
         known_sign = known_sign.astype(int)
         infer_sign = kwargs.get('infer_sign', known_sign)
         if infer_sign is None:
             infer_sign = known_sign
-
-        # check if we have unknown cells
-        if np.sum(infer_sign==0)>0:
-            print('Unknown cells detected, will infer sign of cells')
 
         if self.single_subspace and all([np.all(mask) for mask in masks]):
             # Return exact m-step updates for C, F, d, and inv_etas

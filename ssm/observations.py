@@ -1178,78 +1178,53 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
             if dynamics_dales_constraint>0:    
                 # this contains the fraction of positive columns in the dynamics matrix
                 assert lags==1, "Only lags==1 is supported for now" 
+                """ Here we used cvxpy to solve the linear regression problem"""
+                # modifying this to cvxpy so as to put dale's law
+                W = cp.Variable((D,(D*lags+M)))
+                # initialize W to the dynamics matrix
+                W_inital = np.zeros((D, D*lags+M))
+                W_inital[:D,:D*lags] = self.As[k]
+                if M>0:
+                    W_inital[:D,D*lags:D*lags+M] = self.Vs[k]
+                W.value = W_inital
 
-                max_iters = 10
-                for i in range(max_iters):
-                    """ Here we used cvxpy to solve the linear regression problem"""
-                    # modifying this to cvxpy so as to put dale's law
-                    W = cp.Variable((D,(D*lags+M)))
-                    # initialize W to the dynamics matrix
-                    W_inital = np.zeros((D, D*lags+M))
-                    W_inital[:D,:D*lags] = self.As[k]
-                    if M>0:
-                        W_inital[:D,D*lags:D*lags+M] = self.Vs[k]
-                    W.value = W_inital
-
-                    # put dales law constraints on A
-                    # currently only works for lags==1
-                    assert lags==1, "Only lags==1 is supported for now"
-                    # add constraints on the dynamics vector
-                    constraints = []
-                    d_e = int(dynamics_dales_constraint*D)
-                    # put constraints on the first d_e columns of W matrix, except the diagonal elements
-                    for i in range(d_e):
-                        for j in range(D):
-                            if i!=j:
-                                constraints.append(W[j,i]>=0)
-                    # put constraints on the last D-d_e columns of W matrix, except the diagonal elements
-                    for i in range(d_e,D):
-                        for j in range(D):
-                            if i!=j:
-                                constraints.append(W[j,i]<=0)
-                    # constraints.append(W[:,:d_e]>=0)
-                    # constraints.append(W[:,d_e:]<=0)
-                    # get the inverse of Sigma
-                    Q_inv = np.linalg.inv(self.Sigmas[k])
-                    # let's normalize Q_inv by its max absolute value
-                    Q_inv = Q_inv/np.max(np.abs(Q_inv))
-                    # perform a cholesky decomposition
-                    L = np.linalg.cholesky(Q_inv)
-                    # check if the cholesky decomposition is successful
-                    assert np.allclose(L@L.T, Q_inv), "Cholesky decomposition failed"
-                    kron_ExuxuTs = np.kron((ExuxuTs_k+self.J0_k).T, np.eye(D))
-                    # define the objective function
-                    objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs_k+self.h0_k)))
-                    # solve the problem
-                    prob = cp.Problem(objective, constraints)
-                    prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True,)
-                    # check if the problem is solved
-                    if prob.status != 'optimal':
-                        print("Warning: M step for A failed to converge!")
-                    # print the value of the objective function 
-                    Wk = W.value
-
-                    # now update Sigma
-                    EWxyT =  Wk @ ExuyTs_k
-                    sqerr = EyyTs[k] - EWxyT.T - EWxyT + Wk @ ExuxuTs_k @ Wk.T
-                    nu = self.nu0 + Ens[k]
-                    Sigmas[k] = (sqerr + self.Psi0) / (nu + D + 1)
-
-                    # check if Sigma is PSD
-                    assert np.all(np.linalg.eigvals(Sigmas[k]) > 0), "Sigma is not PSD in dynamics m step!"
-                
-                    # check for convergence
-                    if np.linalg.norm(Wk-W_inital)/np.linalg.norm(Wk)<1e-3:    
-                        print("M step for A converged in {} iterations".format(i+1))
-                        break
-                    else:
-                        self.As[k] = Wk[:, :D * lags]
-                        self.Vs[k] = Wk[:, D * lags:D*lags+M]
-                        self.Sigmas[k] = Sigmas[k]
-
-                    if i==(max_iters-1):
-                        print("M step for A did not converge in {} iterations".format(i+1))
-
+                # put dales law constraints on A
+                # currently only works for lags==1
+                assert lags==1, "Only lags==1 is supported for now"
+                # add constraints on the dynamics vector
+                constraints = []
+                d_e = int(dynamics_dales_constraint*D)
+                # put constraints on the first d_e columns of W matrix, except the diagonal elements
+                for i in range(d_e):
+                    for j in range(D):
+                        if i!=j:
+                            constraints.append(W[j,i]>=0)
+                # put constraints on the last D-d_e columns of W matrix, except the diagonal elements
+                for i in range(d_e,D):
+                    for j in range(D):
+                        if i!=j:
+                            constraints.append(W[j,i]<=0)
+                # constraints.append(W[:,:d_e]>=0)
+                # constraints.append(W[:,d_e:]<=0)
+                # get the inverse of Sigma
+                Q_inv = np.linalg.inv(self.Sigmas[k])
+                # let's normalize Q_inv by its max absolute value
+                Q_inv = Q_inv/np.max(np.abs(Q_inv))
+                # perform a cholesky decomposition
+                L = np.linalg.cholesky(Q_inv)
+                # check if the cholesky decomposition is successful
+                assert np.allclose(L@L.T, Q_inv), "Cholesky decomposition failed"
+                kron_ExuxuTs = np.kron((ExuxuTs_k+self.J0_k).T, np.eye(D))
+                # define the objective function
+                objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs_k+self.h0_k)))
+                # solve the problem
+                prob = cp.Problem(objective, constraints)
+                prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True,)
+                # check if the problem is solved
+                if prob.status != 'optimal':
+                    print("Warning: M step for A failed to converge!")
+                # print the value of the objective function 
+                Wk = W.value
             else:
                 Wk = np.linalg.solve(ExuxuTs_k + self.J0_k, ExuyTs_k + self.h0_k).T
                 

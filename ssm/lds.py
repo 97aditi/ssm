@@ -322,7 +322,6 @@ class SLDS(object):
         x_mask = np.ones_like(variational_mean, dtype=bool)
         pi0 = self.init_state_distn.initial_state_distn
         Ps = self.transitions.transition_matrices(variational_mean, input, x_mask, tag)
-        log_likes = self.dynamics.log_likelihoods(variational_mean, input, x_mask, tag)
         log_likes += self.emissions.log_likelihoods(data, input, mask, tag, variational_mean)
         return hmm_expected_states(pi0, Ps, log_likes)
 
@@ -770,6 +769,18 @@ class SLDS(object):
                     variational_posterior, datas, inputs, masks, tags, num_samples)
 
             # 2. Update the continuous state posterior q(x)
+            # let's check if we have unknown cells
+            # if infer_sign is not None:
+            #     # remove activity corresponding to those cells for continuous state update
+            #     unknown_cells = np.where(infer_sign==0)[0]
+            #     # create a mask for the unknown cells
+            #     masks_e_step = []
+            #     for i in range(len(datas)):
+            #         mask = np.ones(datas[i].shape, dtype=bool)
+            #         mask[:,unknown_cells] = 0
+            #         masks_e_step.append(mask)
+            # else:
+            #     masks_e_step = masks
             self._fit_laplace_em_continuous_state_update(
                 variational_posterior, datas, inputs, masks, tags,
                 continuous_optimizer, continuous_tolerance, continuous_maxiter)   
@@ -777,7 +788,8 @@ class SLDS(object):
             # Update parameters
             if learning:
                 self._fit_laplace_em_params_update(
-                    variational_posterior, datas, inputs, masks, tags,  emission_optimizer, emission_optimizer_maxiter, alpha, dynamics_dales_constraint, emission_block_diagonal, infer_sign)
+                    variational_posterior, datas, inputs, masks, tags,  emission_optimizer,\
+                          emission_optimizer_maxiter, alpha, dynamics_dales_constraint, emission_block_diagonal, infer_sign)
             
             if self.K==1:
                 elbos.append(self.log_probability(datas, inputs, masks, tags))
@@ -794,6 +806,10 @@ class SLDS(object):
     
             if verbose == 2:
               pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
+            # check for convergence
+            if np.abs(elbos[-1] - elbos[-2]) < 1e-4 and itr>5:
+                print("Converged at iteration {}".format(itr))
+                break
 
         return np.array(elbos)
 
@@ -895,7 +911,19 @@ class SLDS(object):
                 self.emissions.Cs = C[np.newaxis, :, :].copy()
                 self.emissions.ds = d[np.newaxis, :].copy()
                 self.emissions.inv_etas = R[np.newaxis, :].copy()
-                
+
+        # infer_sign = kwargs.get('infer_sign', None)
+        # if infer_sign is not None:
+        #     # remove activity corresponding to those cells for continuous state update
+        #     unknown_cells = np.where(infer_sign==0)[0]
+        #     # create a mask for the unknown cells
+        #     masks_e_step = []
+        #     for i in range(len(datas)):
+        #         mask = np.ones(datas[i].shape, dtype=bool)
+        #         mask[:,unknown_cells] = 0
+        #         masks_e_step.append(mask)
+        # else:
+        #     masks_e_step = masks
         # Initialize the variational posterior
         variational_posterior_kwargs = variational_posterior_kwargs or {}
         posterior = self._make_variational_posterior(
