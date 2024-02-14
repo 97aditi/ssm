@@ -142,6 +142,7 @@ class SLDS(object):
         self.transitions = transitions
         self.dynamics = dynamics
         self.emissions = emissions
+        
 
     @property
     def params(self):
@@ -569,11 +570,14 @@ class SLDS(object):
         # Optimize the expected log joint for each data array to find the mode
         # and the curvature around the mode.  This gives a  Laplace approximation
         # for q(x).
+
         continuous_state_params = []
         x0s = variational_posterior.mean_continuous_states
         for (Ez, Ezzp1, _), x0, data, input, mask, tag in \
             zip(variational_posterior.discrete_expectations,
                 x0s, datas, inputs, masks, tags):
+            unknown_cells = np.argwhere(self.infer_sign==0)[:,0]
+            data = np.delete(data, unknown_cells, axis=1)
 
             # Use Newton's method or LBFGS to find the argmax of the expected log joint
             scale = x0.size
@@ -627,8 +631,7 @@ class SLDS(object):
                                       emission_optimizer_maxiter,
                                       alpha,
                                       dynamics_dales_constraint=False,
-                                      emission_block_diagonal=False,
-                                      infer_sign = None,):
+                                      emission_block_diagonal=False,):
 
         # Compute necessary expectations either analytically or via samples
         continuous_samples = variational_posterior.sample_continuous_states()
@@ -684,7 +687,7 @@ class SLDS(object):
                                 optimizer=emission_optimizer,
                                 maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
                                 dynamics_dales_constraint = dynamics_dales_constraint,
-                                infer_sign=infer_sign)
+                                infer_sign=self.infer_sign)
         else:
             curr_prms = copy.deepcopy(self.emissions.params)
             self.emissions.m_step(discrete_expectations, continuous_samples,
@@ -746,7 +749,7 @@ class SLDS(object):
                         learning=True,
                         dynamics_dales_constraint=False,
                         emission_block_diagonal=False,
-                        infer_sign=None,):
+                        ):
         """
         Fit an approximate posterior p(z, x | y) \approx q(z) q(x).
         Perform block coordinate ascent on q(z) followed by q(x).
@@ -769,18 +772,6 @@ class SLDS(object):
                     variational_posterior, datas, inputs, masks, tags, num_samples)
 
             # 2. Update the continuous state posterior q(x)
-            # let's check if we have unknown cells
-            # if infer_sign is not None:
-            #     # remove activity corresponding to those cells for continuous state update
-            #     unknown_cells = np.where(infer_sign==0)[0]
-            #     # create a mask for the unknown cells
-            #     masks_e_step = []
-            #     for i in range(len(datas)):
-            #         mask = np.ones(datas[i].shape, dtype=bool)
-            #         mask[:,unknown_cells] = 0
-            #         masks_e_step.append(mask)
-            # else:
-            #     masks_e_step = masks
             self._fit_laplace_em_continuous_state_update(
                 variational_posterior, datas, inputs, masks, tags,
                 continuous_optimizer, continuous_tolerance, continuous_maxiter)   
@@ -789,7 +780,7 @@ class SLDS(object):
             if learning:
                 self._fit_laplace_em_params_update(
                     variational_posterior, datas, inputs, masks, tags,  emission_optimizer,\
-                          emission_optimizer_maxiter, alpha, dynamics_dales_constraint, emission_block_diagonal, infer_sign)
+                          emission_optimizer_maxiter, alpha, dynamics_dales_constraint, emission_block_diagonal,)
             
             if self.K==1:
                 elbos.append(self.log_probability(datas, inputs, masks, tags))
@@ -824,6 +815,10 @@ class SLDS(object):
                 tridiag=varinf.SLDSTriDiagVariationalPosterior,
                 structured_meanfield=varinf.SLDSStructuredMeanFieldVariationalPosterior
                 )
+            
+            if self.infer_sign is not None:
+                # delete data from the unknown cells
+                datas = [np.delete(data, np.argwhere(self.infer_sign==0)[:,0], axis=1) for data in datas]
 
             if variational_posterior not in _var_posteriors:
                 raise Exception("Invalid posterior: {}. Options are {}.".\
@@ -912,18 +907,6 @@ class SLDS(object):
                 self.emissions.ds = d[np.newaxis, :].copy()
                 self.emissions.inv_etas = R[np.newaxis, :].copy()
 
-        # infer_sign = kwargs.get('infer_sign', None)
-        # if infer_sign is not None:
-        #     # remove activity corresponding to those cells for continuous state update
-        #     unknown_cells = np.where(infer_sign==0)[0]
-        #     # create a mask for the unknown cells
-        #     masks_e_step = []
-        #     for i in range(len(datas)):
-        #         mask = np.ones(datas[i].shape, dtype=bool)
-        #         mask[:,unknown_cells] = 0
-        #         masks_e_step.append(mask)
-        # else:
-        #     masks_e_step = masks
         # Initialize the variational posterior
         variational_posterior_kwargs = variational_posterior_kwargs or {}
         posterior = self._make_variational_posterior(
@@ -1061,6 +1044,12 @@ class LDS(SLDS):
 
         init_state_distn = isd.InitialStateDistribution(1, D, M)
         transitions = trans.StationaryTransitions(1, D, M)
+        # check if emission_kwargs has infer_sign
+        if emission_kwargs is not None:
+            if 'infer_sign' in emission_kwargs:
+                self.infer_sign = emission_kwargs['infer_sign']
+            else:
+                self.infer_sign = None
         super().__init__(N, 1, D, M=M,
                          init_state_distn=init_state_distn,
                          transitions=transitions,

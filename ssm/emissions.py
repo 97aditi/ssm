@@ -352,13 +352,14 @@ class _NeuralNetworkEmissions(Emissions):
 
 # Observation models for SLDS
 class _GaussianEmissionsMixin(object):
-    def __init__(self, N, K, D, M=0, single_subspace=True, **kwargs):
+    def __init__(self, N, K, D, M=0, single_subspace=True, infer_sign=None, **kwargs):
         super(_GaussianEmissionsMixin, self).__init__(N, K, D, M=M, single_subspace=single_subspace, **kwargs)
         # self.inv_etas = -1 + npr.randn(1, N) if single_subspace else npr.randn(K, N)
         self.inv_etas = np.random.randn(1, N, N) if single_subspace else np.random.randn(K, N, N)
         # parameters of the inverse wishart prior on the emission noise
         self.Psi0 = np.ones(1) if single_subspace else np.ones(K)
         self.nu0 = np.ones(1) if single_subspace else np.ones(K)
+        self.infer_signs = infer_sign
 
     @property
     def params(self):
@@ -375,13 +376,19 @@ class _GaussianEmissionsMixin(object):
             self.inv_etas = self.inv_etas[perm]
 
     def log_likelihoods(self, data, input, mask, tag, x):
-        # if mask is not None and np.any(~mask) and not isinstance(mus, np.ndarray):
-        #     raise Exception("Current implementation of multivariate_normal_logpdf for masked data"
-        #                     "does not work with autograd because it writes to an array. "
-        #                     "Use DiagonalGaussian instead if you need to support missing data.")
+        if mask is not None and np.any(~mask) and not isinstance(mus, np.ndarray):
+            raise Exception("Current implementation of multivariate_normal_logpdf for masked data"
+                            "does not work with autograd because it writes to an array. "
+                            "Use DiagonalGaussian instead if you need to support missing data.")
 
         mus = self.forward(x, input, tag).reshape((-1, data.shape[0], self.N))
         Sigmas = self.inv_etas
+
+        if data.shape[1]!=self.N and self.infer_signs is not None:
+            # remove dimensions of mu and Sigma corresponding to the unknown neurons
+            mus = mus[:, :, self.infer_signs!=0]
+            Sigmas = Sigmas[:, self.infer_signs!=0, :][:, :, self.infer_signs!=0]
+
         # # TODO: this is wrong, needs to be fixed
         # lls = -0.5 * np.linalg.slogdet(2 * np.pi * etas)[1] - 0.5 * (data[:, None, :] - mus) @ np.linalg.inv(etas) @ ((data[:, None, :] - mus).transpose((0, 2, 1)))
         return np.column_stack([stats.multivariate_normal_logpdf(data, mu, Sigma)
@@ -422,8 +429,13 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         # Return (T, D, D) array of blocks for the diagonal of the Hessian
         T, D = data.shape
         if self.single_subspace:
-            R_inv = np.linalg.inv(self.inv_etas[0])
-            block = -1.0 * self.Cs[0].T@R_inv@self.Cs[0]
+            # check if we have unknown neurons
+            if self.infer_signs is not None:
+                R_inv = np.linalg.inv(self.inv_etas[0][self.infer_signs!=0, :][:, self.infer_signs!=0])
+                block = -1.0 * self.Cs[0][self.infer_signs!=0,:].T@R_inv@self.Cs[0][self.infer_signs!=0, :]
+            else:
+                R_inv = np.linalg.inv(self.inv_etas[0])
+                block = -1.0 * self.Cs[0].T@R_inv@self.Cs[0]
             hess = np.tile(block[None,:,:], (T, 1, 1))
         else:
             blocks = np.array([-1.0 * C.T@inv_eta@C
@@ -458,7 +470,8 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
 
         weights = [np.ones(y.shape[0]) for y in ys]
 
-        for y, input, weight, (_, Ex, smoothed_sigmas, _), (Ez, _, _), in zip(ys, inputs, weights, continuous_expectations, discrete_expectations):
+        for y, input, weight, (_, Ex, smoothed_sigmas, _), (Ez, _, _), in zip(ys, inputs, weights, \
+                                                continuous_expectations, discrete_expectations):
             for k in range(self.K):
                 w = Ez[:,k]
                 EyyT[k] += np.einsum('t,ti,tj->ij',w, y, y)
