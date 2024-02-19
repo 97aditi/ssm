@@ -59,7 +59,6 @@ def solve_regression_for_unknown_cells(ExxT, ExyT, fit_intercept, initial_C, \
     for i in range(len(unknown_cells)):
         # let's initialize the emission matrix for the unknown cell
         W = cp.Variable((ExxT.shape[0]))
-        
         # let's get the ExyT corresponding to the unknown cell
         ExyT_i = ExyT[:, i]
         # we will solve two problems, one for positive sign and one for negative sign
@@ -154,23 +153,35 @@ def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_
     else:
         return W.value
     
-def solve_unknown_neuron_C(ExxT, ExyT_i, dynamics_dales_constraint, latent_space_dim):
+def solve_unknown_neuron_C(ExxT, ExyT_i, dynamics_dales_constraint, latent_space_dim, initial_C_i, fit_intercept):
     """solve for the row of C corresponding to this one unknown neuron"""
     # this neuron can be excitatory or inhibitory
     prob_val = []
     W_is = []
+    d_e = int(dynamics_dales_constraint*latent_space_dim)
     for i in range(2):
-        W_i = cp.Variable((ExxT.shape[0]))
         if i==0:
+            W_i = cp.Variable((d_e+fit_intercept))
             # assume the neuron is excitatory
-            constraints = [W_i[:dynamics_dales_constraint*latent_space_dim]>=0, \
-                        W_i[dynamics_dales_constraint*latent_space_dim:latent_space_dim]==0]
+            constraints = [W_i[:d_e]>=0,]
+            ExxT_type = ExxT[:d_e, :d_e]
+            ExyT_i_type = ExyT_i[:d_e]
+            if fit_intercept:
+                # add the last column of ExxT and ExyTtodo: FIX THIS
+                ExxT_type = np.hstack((ExxT_type, ExxT[:d_e,-1][:,None]))
+                last_row = np.zeros(d_e+1)
+                last_row[-1], last_row[:d_e] = ExxT[-1, -1], ExxT[-1, :d_e]
+                ExxT_type = np.vstack((ExxT_type, last_row[None,:]))
+                ExyT_i_type = np.concatenate((ExyT_i_type, [ExyT_i[-1]]))
         else:
             # assume the neuron is inhibitory
-            constraints = [W_i[dynamics_dales_constraint*latent_space_dim:latent_space_dim]>=0, \
-                        W_i[:dynamics_dales_constraint*latent_space_dim]==0]
+            d_i = latent_space_dim - d_e
+            W_i  = cp.Variable((d_i+fit_intercept))
+            constraints = [W_i[:d_i]>=0,]
+            ExxT_type = ExxT[d_e:, d_e:]
+            ExyT_i_type = ExyT_i[d_e:]
         # add the objective function
-        objective = cp.Minimize(cp.quad_form((W_i).flatten(), ExxT) - 2*W_i.T@ExyT_i)
+        objective = cp.Minimize(cp.quad_form((W_i).flatten(), ExxT_type) - 2*W_i.T@ExyT_i_type)
         # solve the problems
         prob = cp.Problem(objective, constraints)
         prob.solve(solver=cp.MOSEK, verbose=False,)
@@ -183,10 +194,14 @@ def solve_unknown_neuron_C(ExxT, ExyT_i, dynamics_dales_constraint, latent_space
     # check which sign gives lower error
     if prob_val[0]<prob_val[1]:
         print("neuron is excitatory: ", prob_val[0], prob_val[1])
-        return W_is[0]
+        W_i = np.zeros((latent_space_dim+fit_intercept))
+        W_i[:d_e], W_i[-1] = W_is[0][:d_e], W_is[0][-1]
+        return W_i
     else:
         print("neuron is inhibitory", prob_val[0], prob_val[1])
-        return W_is[1]
+        W_i = np.zeros((latent_space_dim+fit_intercept))
+        W_i[d_e:] = W_is[1]
+        return W_i
     
 def solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas,\
                          dynamics_dales_constraint, infer_sign, latent_space_dim):
@@ -202,7 +217,7 @@ def solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, eta
     for i in range(num_neurons):
         if infer_sign[i]==0:
             print("solving for unknown neuron  ", i)
-            W[i,:] = solve_unknown_neuron_C(ExxT, ExyT[:,i], dynamics_dales_constraint, latent_space_dim)
+            W[i,:] = solve_unknown_neuron_C(ExxT, ExyT[:,i], dynamics_dales_constraint, latent_space_dim, initial_C[i,:], fit_intercept)
         else:
             # let's initialize the emission matrix for the unknown cell
             W_i = cp.Variable((ExxT.shape[0]))
@@ -332,8 +347,8 @@ def fit_linear_regression(Xs, ys,
     nu = nu0 + weight_sum
     # Get MAP estimate of posterior covariance
     Sigma = (expected_err + Psi0 * np.eye(d)) / (nu + d + 1)
-    if len(unknown_cells)>0:
-        Sigma = np.diag(np.diag(Sigma))
+    # if len(unknown_cells)>0:
+    Sigma = np.diag(np.diag(Sigma))
     if fit_intercept:
         W, b = W_full[:, :-1], W_full[:, -1]
         return W, b, Sigma
