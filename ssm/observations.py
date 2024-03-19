@@ -1135,6 +1135,54 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
             ExuxuTs[k, -1, D:D + M] = ExuxuTs[k, D:D + M, -1].T
 
         return ExuxuTs, ExuyTs, EyyTs, Ens
+    
+
+    def solve_dales_constrained_A(self, dynamics_dales_constraint, num_regions, ExuxuTs_k, ExuyTs_k, As_k, Vs_k, Sigmas_k):
+        """ to solve for a constrained A matrix using cvxpy"""
+       
+        D, M, lags = self.D, self.M, self.lags
+        assert lags==1, "Only lags==1 is supported for now"
+
+        W = cp.Variable((D,D+M)) # define a variable to solve for 
+        if M>0:
+            W_initial = np.concatenate((As_k, Vs_k), axis=1)
+        else:
+            W_inital =  As_k
+        W.value = W_inital # intialize the variable with the previous value
+
+        # put dales law constraints on every region's A matrix
+        constraints = []
+        D_per_region = D//num_regions
+        d_e = int(dynamics_dales_constraint*D_per_region)
+        for region in range(num_regions):
+            for i in range(D_per_region):
+                for j in range(D_per_region):
+                    if i!=j:
+                        if i<d_e:
+                            constraints.append(W[j+(D_per_region*region),i+(D_per_region*region)]>=0)
+                        elif i>=d_e:
+                            constraints.append(W[j+(D_per_region*region),i+(D_per_region*region)]<=0)
+
+        if num_regions==2: # cross-region constraints, assuming there are only two regions
+            constraints_cross_region = [W[0:D_per_region,D_per_region:D_per_region+d_e]>=0, \
+                                        W[D_per_region:2*D_per_region,0:d_e]>=0,\
+                                        W[0:D_per_region,D_per_region+d_e:2*D_per_region]==0, \
+                                        W[D_per_region:2*D_per_region,d_e:D_per_region]==0]
+            constraints.extend(constraints_cross_region)
+
+        Q_inv = np.linalg.inv(Sigmas_k) # get the inverse of Sigma
+        Q_inv = Q_inv/np.max(np.abs(Q_inv)) # for numerical stability
+        L = np.linalg.cholesky(Q_inv) # perform a cholesky decomposition
+        kron_ExuxuTs = np.kron((ExuxuTs_k+self.J0_k).T, np.eye(D))
+        # define the objective function
+        objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs_k+self.h0_k)))
+        prob = cp.Problem(objective, constraints)
+        prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True,) # solve the problem
+        if prob.status != 'optimal': # check if the problem is solved
+            print("Warning: M step for A failed to converge!")
+        Wk = W.value
+        return Wk
+
 
     def m_step(self, expectations, datas, inputs, masks, tags,
                continuous_expectations=None, **kwargs):
@@ -1168,63 +1216,18 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
 
         # check if there are constraints on the dynamics
         dynamics_dales_constraint = kwargs.get('dynamics_dales_constraint', False)
-
+        region_identity = kwargs.get('region_identity', None)
+        num_regions = np.unique(region_identity).shape[0]
+        
         for k in range(K):
             ExuxuTs_k = ExuxuTs[k][:D*lags+M, :D*lags+M]
             ExuyTs_k = ExuyTs[k][:D*lags+M]
             self.J0_k = self.J0[k][:D*lags+M, :D*lags+M]
             self.h0_k = self.h0[k][:D*lags+M]
 
-            if dynamics_dales_constraint>0:    
-                # this contains the fraction of positive columns in the dynamics matrix
-                assert lags==1, "Only lags==1 is supported for now" 
-                """ Here we used cvxpy to solve the linear regression problem"""
-                # modifying this to cvxpy so as to put dale's law
-                W = cp.Variable((D,(D*lags+M)))
-                # initialize W to the dynamics matrix
-                W_inital = np.zeros((D, D*lags+M))
-                W_inital[:D,:D*lags] = self.As[k]
-                if M>0:
-                    W_inital[:D,D*lags:D*lags+M] = self.Vs[k]
-                W.value = W_inital
-
-                # put dales law constraints on A
-                # currently only works for lags==1
-                assert lags==1, "Only lags==1 is supported for now"
-                # add constraints on the dynamics vector
-                constraints = []
-                d_e = int(dynamics_dales_constraint*D)
-                # put constraints on the first d_e columns of W matrix, except the diagonal elements
-                for i in range(d_e):
-                    for j in range(D):
-                        if i!=j:
-                            constraints.append(W[j,i]>=0)
-                # put constraints on the last D-d_e columns of W matrix, except the diagonal elements
-                for i in range(d_e,D):
-                    for j in range(D):
-                        if i!=j:
-                            constraints.append(W[j,i]<=0)
-                # constraints.append(W[:,:d_e]>=0)
-                # constraints.append(W[:,d_e:]<=0)
-                # get the inverse of Sigma
-                Q_inv = np.linalg.inv(self.Sigmas[k])
-                # let's normalize Q_inv by its max absolute value
-                Q_inv = Q_inv/np.max(np.abs(Q_inv))
-                # perform a cholesky decomposition
-                L = np.linalg.cholesky(Q_inv)
-                # check if the cholesky decomposition is successful
-                assert np.allclose(L@L.T, Q_inv), "Cholesky decomposition failed"
-                kron_ExuxuTs = np.kron((ExuxuTs_k+self.J0_k).T, np.eye(D))
-                # define the objective function
-                objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs_k+self.h0_k)))
-                # solve the problem
-                prob = cp.Problem(objective, constraints)
-                prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True,)
-                # check if the problem is solved
-                if prob.status != 'optimal':
-                    print("Warning: M step for A failed to converge!")
-                # print the value of the objective function 
-                Wk = W.value
+            if dynamics_dales_constraint>0:   
+                Wk = self.solve_dales_constrained_A(dynamics_dales_constraint, num_regions, ExuxuTs_k, \
+                                            ExuyTs_k, self.As[k], self.Vs[k], self.Sigmas[k])
             else:
                 Wk = np.linalg.solve(ExuxuTs_k + self.J0_k, ExuyTs_k + self.h0_k).T
                 
@@ -1236,7 +1239,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
             EWxyT =  Wk @ ExuyTs_k
             sqerr = EyyTs[k] - EWxyT.T - EWxyT + Wk @ ExuxuTs_k @ Wk.T
             nu = self.nu0 + Ens[k]
-            Sigmas[k] = (sqerr + self.Psi0) / (nu + D + 1)
+            Sigmas[k] = (sqerr + self.Psi0) / (nu + D + 1) 
 
         # If any states are unused, set their parameters to a perturbation of a used state
         unused = np.where(Ens < 1)[0]

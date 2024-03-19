@@ -347,7 +347,7 @@ class SLDS(object):
     def log_probability(self, datas, inputs=None, masks=None, tags=None):
         warnings.warn("Cannot compute exact marginal log probability for the SLDS.")
         return np.nan
-
+    
     @ensure_variational_args_are_lists
     def _bbvi_elbo(self, variational_posterior, datas, inputs=None, masks=None, tags=None,  n_samples=1):
         """
@@ -653,7 +653,7 @@ class SLDS(object):
                       masks=xmasks,
                       tags=tags,
                       dynamics_dales_constraint=dynamics_dales_constraint,
-                        )
+                      region_identity=self.region_identity)
         exact_m_step_dynamics = [
            obs.AutoRegressiveObservations,
            obs.AutoRegressiveObservationsNoInput,
@@ -687,6 +687,7 @@ class SLDS(object):
                                 optimizer=emission_optimizer,
                                 maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
                                 dynamics_dales_constraint = dynamics_dales_constraint,
+                                region_identity = self.region_identity,
                                 infer_sign=self.infer_sign)
         else:
             curr_prms = copy.deepcopy(self.emissions.params)
@@ -694,7 +695,7 @@ class SLDS(object):
                                 datas, inputs, masks, tags,
                                 optimizer=emission_optimizer,
                                 maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
-                                dynamics_dales_constraint = dynamics_dales_constraint,)
+                                dynamics_dales_constraint = dynamics_dales_constraint)
             self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
 
     def _laplace_em_elbo(self,
@@ -780,7 +781,7 @@ class SLDS(object):
             if learning:
                 self._fit_laplace_em_params_update(
                     variational_posterior, datas, inputs, masks, tags,  emission_optimizer,\
-                          emission_optimizer_maxiter, alpha, dynamics_dales_constraint, emission_block_diagonal,)
+                          emission_optimizer_maxiter, alpha, dynamics_dales_constraint, emission_block_diagonal)
             
             if self.K==1:
                 elbos.append(self.log_probability(datas, inputs, masks, tags))
@@ -1044,12 +1045,15 @@ class LDS(SLDS):
 
         init_state_distn = isd.InitialStateDistribution(1, D, M)
         transitions = trans.StationaryTransitions(1, D, M)
-        # check if emission_kwargs has infer_sign
+        # check if emission_kwargs has infer_sign (E vs I neuron), and region identity
         if emission_kwargs is not None:
-            if 'infer_sign' in emission_kwargs:
-                self.infer_sign = emission_kwargs['infer_sign']
-            else:
-                self.infer_sign = None
+            default_infer_sign = np.ones(N)
+            default_infer_sign[N//2:] = -1  
+            self.infer_sign = emission_kwargs['infer_sign'] if 'infer_sign' in emission_kwargs else default_infer_sign
+            warnings.warn("infer_sign not provided, assuming first 50% of neurons are excitatory and rest are inhibitory")
+            self.region_identity = emission_kwargs['region_identity'] if 'region_identity' in emission_kwargs else np.zeros(N)
+            warnings.warn("region_identity not provided, assuming all neurons are from the same region")
+
         super().__init__(N, 1, D, M=M,
                          init_state_distn=init_state_distn,
                          transitions=transitions,

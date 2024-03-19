@@ -352,7 +352,7 @@ class _NeuralNetworkEmissions(Emissions):
 
 # Observation models for SLDS
 class _GaussianEmissionsMixin(object):
-    def __init__(self, N, K, D, M=0, single_subspace=True, infer_sign=None, **kwargs):
+    def __init__(self, N, K, D, M=0, single_subspace=True, infer_sign=None, region_identity=None, **kwargs):
         super(_GaussianEmissionsMixin, self).__init__(N, K, D, M=M, single_subspace=single_subspace, **kwargs)
         # self.inv_etas = -1 + npr.randn(1, N) if single_subspace else npr.randn(K, N)
         self.inv_etas = np.random.randn(1, N, N) if single_subspace else np.random.randn(K, N, N)
@@ -360,6 +360,7 @@ class _GaussianEmissionsMixin(object):
         self.Psi0 = np.ones(1) if single_subspace else np.ones(K)
         self.nu0 = np.ones(1) if single_subspace else np.ones(K)
         self.infer_signs = infer_sign
+        self.region_identity = region_identity
 
     @property
     def params(self):
@@ -432,7 +433,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             # check if we have unknown neurons
             if self.infer_signs is not None:
                 R_inv = np.linalg.inv(self.inv_etas[0][self.infer_signs!=0, :][:, self.infer_signs!=0])
-                block = -1.0 * self.Cs[0][self.infer_signs!=0,:].T@R_inv@self.Cs[0][self.infer_signs!=0, :]
+                block = -1.0 * (self.Cs[0][self.infer_signs!=0,:]).T@R_inv@(self.Cs[0][self.infer_signs!=0, :])
             else:
                 R_inv = np.linalg.inv(self.inv_etas[0])
                 block = -1.0 * self.Cs[0].T@R_inv@self.Cs[0]
@@ -488,17 +489,12 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
 
         ws = [Ez for (Ez, _, _) in discrete_expectations]
 
-        block_diagonal = kwargs.get('emission_block_diagonal', False)
-        dynamics_dales_constraint = kwargs.get('dynamics_dales_constraint', False)
-        # infer_sign should be an array containing +1 if the cells is E, -1 if the cells \
-        # is I and 0 if unknown, when this is not given we assume that cells are sorted already
-        known_sign = np.ones((self.N))
-        known_sign[int(self.N*block_diagonal):] = -1
-        known_sign = known_sign.astype(int)
-        infer_sign = kwargs.get('infer_sign', known_sign)
-        if infer_sign is None:
-            infer_sign = known_sign
-
+        block_diagonal = kwargs.get('emission_block_diagonal', False) # whether to learn block_diagonal emissions
+        dynamics_dales_constraint = kwargs.get('dynamics_dales_constraint', False) # whether to enforce the Dale's principle on the dynamics
+        region_identity = kwargs.get('region_identity', None) # which region each neuron belongs to
+        num_regions = np.unique(region_identity).shape[0] if region_identity is not None else 1
+        infer_sign = kwargs.get('infer_sign', None) # whether a neuron is excitatory or inhibitory (or unknown)
+        
         if self.single_subspace and all([np.all(mask) for mask in masks]):
             # Return exact m-step updates for C, F, d, and inv_etas
             initial_C = np.hstack(([self.Cs[0], self.ds[0][:, None]]))
@@ -506,13 +502,14 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             expectations = [ExxT[0], ExyT[0], EyyT[0], weight_sum]
             CF, d, Sigma = fit_linear_regression(
                 Xs, ys,
-                latent_space_dim=self.D,
+                latent_space_dim=int(self.D//num_regions),
                 expectations=expectations, 
                 fit_intercept=True,
                 Psi0=self.Psi0[0], nu0=self.nu0[0],
                 prior_ExxT=1e-4 * np.eye(self.D+1),
                 prior_ExyT=np.zeros((self.D+1, self.N)), block_diagonal=block_diagonal,
                 dynamics_dales_constraint = dynamics_dales_constraint,  
+                region_identity = region_identity,
                 infer_sign = infer_sign,
                 initial_C=initial_C, current_etas=self.inv_etas[0]) 
             self.Cs = CF[None, :, :self.D]
@@ -534,7 +531,8 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                     prior_ExxT=1e-4* np.eye(self.D + self.M + 1),
                     prior_ExyT=np.zeros((self.D + self.M + 1, self.N)),
                     block_diagonal=block_diagonal,
-                    dynamics_dales_constraint = dynamics_dales_constraint,  
+                    dynamics_dales_constraint = dynamics_dales_constraint, 
+                    region_identity = region_identity,
                     infer_sign = infer_sign,
                     initial_C=initial_C, current_etas=self.inv_etas[0])
                 Cs.append(CF[:, :self.D])

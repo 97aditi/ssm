@@ -204,24 +204,52 @@ def solve_unknown_neuron_C(ExxT, ExyT_i, dynamics_dales_constraint, latent_space
         return W_i
     
 def solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas,\
-                         dynamics_dales_constraint, infer_sign, latent_space_dim):
+                         dynamics_dales_constraint, infer_sign, latent_space_dim, region_identities):
     """ learn each row of the C matrix separately, this may speed up inference \
         as optimization will now happen over a much smaller d-dimensional space, aditionally, \
         we can infer identities of unknown cells using this approach """
     # Caveat: this assumes R to be diagonal
 
     num_neurons = ExyT.shape[1]
+    num_regions = len(np.unique(region_identities))
+    # check if we have intercept or not
+    intercept = ExxT.shape[0] - int(latent_space_dim*num_regions)
+
     # second dim will be d or d+1 based on whether we are fitting intercept 
     W = np.zeros((num_neurons, ExxT.shape[0]))
-    # now let's go over each neuron and solve the regression problem
+    # now let's go over each neuron and solve the regression problem specific to its region
+    
     for i in range(num_neurons):
+        region_id = region_identities[i].astype(int)
+        ExxT_region = ExxT[region_id*latent_space_dim:(region_id+1)*latent_space_dim, region_id*latent_space_dim:(region_id+1)*latent_space_dim]
+        if fit_intercept:
+            ExxT_region = np.hstack((ExxT_region, ExxT[region_id*latent_space_dim:(region_id+1)*latent_space_dim, -1][:,None]))
+            last_row = np.zeros(latent_space_dim+1)
+            last_row[-1], last_row[:latent_space_dim] = ExxT[-1, -1], ExxT[-1, region_id*latent_space_dim:(region_id+1)*latent_space_dim]
+            ExxT_region = np.vstack((ExxT_region, last_row[None,:]))
+        ExyT_neuron = ExyT[region_id*latent_space_dim:(region_id+1)*latent_space_dim, i]
+        if fit_intercept:
+            ExyT_neuron = np.concatenate((ExyT_neuron, [ExyT[-1, i]]))
+        
         if infer_sign[i]==0:
             print("solving for unknown neuron  ", i)
-            W[i,:] = solve_unknown_neuron_C(ExxT, ExyT[:,i], dynamics_dales_constraint, latent_space_dim, initial_C[i,:], fit_intercept)
+            if fit_intercept:
+                init_val = np.zeros(latent_space_dim+1)
+                init_val[:latent_space_dim], init_val[-1] = initial_C[i, region_id*latent_space_dim:(region_id+1)*latent_space_dim], initial_C[i,-1]
+                W_i.value = init_val
+            else:
+                initial_value = initial_C[i, region_id*latent_space_dim:(region_id+1)*latent_space_dim]
+            W_i = \
+                solve_unknown_neuron_C(ExxT_region, ExyT_neuron, dynamics_dales_constraint, latent_space_dim, initial_value, fit_intercept)
         else:
-            # let's initialize the emission matrix for the unknown cell
-            W_i = cp.Variable((ExxT.shape[0]))
-            W_i.value = initial_C[i, :]
+            W_i = cp.Variable((latent_space_dim+fit_intercept))
+            if fit_intercept:
+                init_val = np.zeros(latent_space_dim+1)
+                init_val[:latent_space_dim], init_val[-1] = initial_C[i, region_id*latent_space_dim:(region_id+1)*latent_space_dim], initial_C[i,-1]
+                W_i.value = init_val
+            else:
+                W_i.value = initial_C[i, region_id*latent_space_dim:(region_id+1)*latent_space_dim]
+            
             # check if the cell is excitatory or inhibitory
             if infer_sign[i]==1:
                 # add constraints such that W is block sparse and non negative
@@ -231,15 +259,18 @@ def solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, eta
                 constraints = [W_i[dynamics_dales_constraint*latent_space_dim:latent_space_dim]>=0, \
                             W_i[:dynamics_dales_constraint*latent_space_dim]==0]
             # add the objective function
-            objective = cp.Minimize(cp.quad_form((W_i).flatten(), ExxT) - 2*W_i.T@ExyT[:, i])
+            objective = cp.Minimize(cp.quad_form((W_i).flatten(), ExxT_region) - 2*W_i.T@ExyT_neuron)
             # solve the problems
             prob = cp.Problem(objective, constraints)
             prob.solve(solver=cp.MOSEK, verbose=False, warm_start=True,)
             # check if the problem is solved
             if prob.status != 'optimal':
                 print("Warning: M step for C failed to converge!")
-            # get the emission matrix
-            W[i, :] = W_i.value
+        # get the emission matrix
+        W[i, region_id*latent_space_dim:(region_id+1)*latent_space_dim] = W_i.value[:latent_space_dim]
+        if fit_intercept:
+            W[i, -1] = W_i.value[-1]
+        
     return W
 
 
@@ -254,6 +285,7 @@ def fit_linear_regression(Xs, ys,
                           Psi0=1,
                           block_diagonal = False,
                           dynamics_dales_constraint = False,
+                          region_identity = None,
                           infer_sign = None,
                           initial_C = None,
                           current_etas = None
@@ -337,7 +369,7 @@ def fit_linear_regression(Xs, ys,
         # update C
         ExxT = ExxT + prior_ExxT
         W_full = solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, \
-                    current_etas, dynamics_dales_constraint, infer_sign, latent_space_dim)
+                    current_etas, dynamics_dales_constraint, infer_sign, latent_space_dim, region_identity)
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T
         
