@@ -1147,8 +1147,8 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         if M>0:
             W_initial = np.concatenate((As_k, Vs_k), axis=1)
         else:
-            W_inital =  As_k
-        W.value = W_inital # intialize the variable with the previous value
+            W_initial =  As_k
+        W.value = W_initial # intialize the variable with the previous value
 
         # put dales law constraints on every region's A matrix
         constraints = []
@@ -1177,7 +1177,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         # define the objective function
         objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs_k+self.h0_k)))
         prob = cp.Problem(objective, constraints)
-        prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True,) # solve the problem
+        prob.solve(solver = cp.MOSEK, verbose = True, warm_start = True,) # solve the problem
         if prob.status != 'optimal': # check if the problem is solved
             print("Warning: M step for A failed to converge!")
         Wk = W.value
