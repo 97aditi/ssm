@@ -1163,10 +1163,11 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                         elif i>=d_e:
                             constraints.append(W[j+(D_per_region*region),i+(D_per_region*region)]<=0)
 
-        if num_regions==2: # cross-region constraints, assuming there are only two regions
+        if num_regions==2: # cross-region constraints, assuming there are only two regions, 
+            # where one is in the cortex and the other is in the striatum 
             constraints_cross_region = [W[0:D_per_region,D_per_region:D_per_region+d_e]>=0, \
                                         W[D_per_region:2*D_per_region,0:d_e]>=0,\
-                                        W[0:D_per_region,D_per_region+d_e:2*D_per_region]==0, \
+                                        W[0:D_per_region,D_per_region+d_e:2*D_per_region]<=0, \
                                         W[D_per_region:2*D_per_region,d_e:D_per_region]==0]
             constraints.extend(constraints_cross_region)
 
