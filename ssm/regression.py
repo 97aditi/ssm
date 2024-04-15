@@ -67,7 +67,7 @@ def solve_regression_for_unknown_cells(ExxT, ExyT, fit_intercept, initial_C, \
         constraints_i = [W[d_e:latent_space_dim]>=0, W[:d_e]==0]
         objective = cp.Minimize(cp.quad_form((W).flatten(), ExxT) - 2*W.T@ExyT_i)
         prob = cp.Problem(objective, constraints_e)
-        prob.solve(solver=cp.MOSEK, verbose=False, warm_start=False,)
+        prob.solve(solver=cp.MOSEK, verbose=True, warm_start=False,)
         # check if the problem is solved
         if prob.status != 'optimal':
             print("Warning: M step for C unknown failed to converge!")
@@ -386,6 +386,7 @@ def fit_linear_regression(Xs, ys,
         return W, b, Sigma
     else:
         W = W_full
+
         b = 0
         return W, Sigma
 
