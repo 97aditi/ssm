@@ -251,7 +251,8 @@ class SLDS(object):
         # find the variance of each dimension
         var = np.var(noise, axis=0)
         # set the variance of the dynamics model
-        self.dynamics._sqrt_Sigmas = np.array([np.diag(np.sqrt(var))])
+        # self.dynamics._sqrt_Sigmas = np.array([np.diag(np.sqrt(var))])
+        self.dynamics._sqrt_Sigmas = np.array([np.eye(self.D) + 1e-5*np.eye(self.D)])
 
     def permute(self, perm):
         """
@@ -766,7 +767,9 @@ class SLDS(object):
 
         pbar = ssm_pbar(num_iters, verbose, "ELBO: {:.1f}", [elbos[-1]])
 
+        i = 0
         for itr in pbar:
+            i=i+1
             # 1. Update the discrete state posterior q(z) if K>1
             if self.K > 1:
                 self._fit_laplace_em_discrete_state_update(
@@ -795,7 +798,18 @@ class SLDS(object):
             else:
                 elbos.append(self._laplace_em_elbo(
                 variational_posterior, datas, inputs, masks, tags, n_samples=num_samples))
-    
+
+            # save model parameters
+            model_params = [self.dynamics.As[0], self.dynamics.Sigmas[0], self.emissions.Cs[0], self.emissions.inv_etas[0]]
+            # create a dict to save the model parameters
+            model_params = {}
+            model_params['A'] = self.dynamics.As[0]
+            model_params['Q'] = self.dynamics.Sigmas[0]
+            model_params['C'] = self.emissions.Cs[0]
+            model_params['R'] = self.emissions.inv_etas[0]
+            print("saving model parameters")
+            np.save('debugging/model_params_iter_'+str(i)+'.npy', model_params)
+            
             if verbose == 2:
               pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
             # check for convergence
@@ -913,8 +927,11 @@ class SLDS(object):
         posterior = self._make_variational_posterior(
             variational_posterior, datas, inputs, masks, tags, method, **variational_posterior_kwargs)
 
-        # added dynamics_kwargs to contain information about any constraints on the dynamics matrix, such as if columns should obey dale's law (dynamics_dales_constraint contains fraction of positive columns) and if the diagonal should be zero (dynamics_diagonal_zero)
-        # added emission_kwargs to impose block-sparse structure / positivity on the emission matrix (emission_block_diagonal contains fraction of nonzero blocks column wise)
+        # added dynamics_kwargs to contain information about any constraints on the dynamics matrix, \
+        # such as if columns should obey dale's law (dynamics_dales_constraint contains fraction of positive columns) 
+        # and if the diagonal should be zero (dynamics_diagonal_zero)
+        # added emission_kwargs to impose block-sparse structure / positivity on the emission matrix 
+        # (emission_block_diagonal contains fraction of nonzero blocks column wise)
 
         dynamics_kwargs = dynamics_kwargs or {}
         emission_kwargs = emission_kwargs or {}
