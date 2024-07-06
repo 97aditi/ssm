@@ -222,7 +222,7 @@ def solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, eta
         ExyT_neuron = ExyT[d_prev_regions:d_prev_regions + latent_space_dim, i]
         if fit_intercept:
             ExyT_neuron = np.concatenate((ExyT_neuron, [ExyT[-1, i]]))
-        
+        # E-I constraints
         if infer_sign[i]==0:
             print("solving for unknown neuron  ", i)
             if fit_intercept:
