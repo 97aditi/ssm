@@ -494,6 +494,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         region_identity = kwargs.get('region_identity', None) # which region each neuron belongs to
         num_regions = np.unique(region_identity).shape[0] if region_identity is not None else 1
         infer_sign = kwargs.get('infer_sign', None) # whether a neuron is excitatory or inhibitory (or unknown)
+        list_of_dims = kwargs.get('list_of_dims', [self.D,]) # list of dimensions for each region
         
         if self.single_subspace and all([np.all(mask) for mask in masks]):
             # Return exact m-step updates for C, F, d, and inv_etas
@@ -502,13 +503,13 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             expectations = [ExxT[0], ExyT[0], EyyT[0], weight_sum]
             CF, d, Sigma = fit_linear_regression(
                 Xs, ys,
-                latent_space_dim=int(self.D//num_regions),
                 expectations=expectations, 
                 fit_intercept=True,
                 Psi0=self.Psi0[0], nu0=self.nu0[0],
                 prior_ExxT=1e-4 * np.eye(self.D+1),
                 prior_ExyT=np.zeros((self.D+1, self.N)), block_diagonal=block_diagonal,
                 dynamics_dales_constraint = dynamics_dales_constraint,  
+                list_of_dims = list_of_dims,
                 region_identity = region_identity,
                 infer_sign = infer_sign,
                 initial_C=initial_C, current_etas=self.inv_etas[0]) 
@@ -524,7 +525,6 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                 expectations = [ExxT[k], ExyT[k], EyyT[k], weight_sum]
                 CF, d, Sigma = fit_linear_regression(
                     Xs, ys, 
-                    latent_space_dim=self.D,
                     expectations = expectations,
                     weights=[w[:, k] for w in ws],
                     Psi0=self.Psi0[k], nu0=self.nu0[k],
@@ -532,6 +532,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                     prior_ExyT=np.zeros((self.D + self.M + 1, self.N)),
                     block_diagonal=block_diagonal,
                     dynamics_dales_constraint = dynamics_dales_constraint, 
+                    list_of_dims = list_of_dims,
                     region_identity = region_identity,
                     infer_sign = infer_sign,
                     initial_C=initial_C, current_etas=self.inv_etas[0])

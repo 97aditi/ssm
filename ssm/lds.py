@@ -632,6 +632,7 @@ class SLDS(object):
                                       emission_optimizer_maxiter,
                                       alpha,
                                       dynamics_dales_constraint=False,
+                                      list_of_dims=[],
                                       emission_block_diagonal=False,):
 
         # Compute necessary expectations either analytically or via samples
@@ -654,6 +655,7 @@ class SLDS(object):
                       masks=xmasks,
                       tags=tags,
                       dynamics_dales_constraint=dynamics_dales_constraint,
+                      list_of_dims=list_of_dims,
                       region_identity=self.region_identity)
         exact_m_step_dynamics = [
            obs.AutoRegressiveObservations,
@@ -681,6 +683,7 @@ class SLDS(object):
 
         if isinstance(self.emissions, emssn.GaussianEmissions):
             continuous_expectations = variational_posterior.continuous_expectations
+            # TODO: do we need this?
             curr_prms = copy.deepcopy(self.emissions.params)
             self.emissions.m_step(discrete_expectations, 
                                 continuous_expectations,
@@ -688,6 +691,7 @@ class SLDS(object):
                                 optimizer=emission_optimizer,
                                 maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
                                 dynamics_dales_constraint = dynamics_dales_constraint,
+                                list_of_dims=list_of_dims,
                                 region_identity = self.region_identity,
                                 infer_sign=self.infer_sign)
         else:
@@ -696,7 +700,10 @@ class SLDS(object):
                                 datas, inputs, masks, tags,
                                 optimizer=emission_optimizer,
                                 maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
-                                dynamics_dales_constraint = dynamics_dales_constraint)
+                                dynamics_dales_constraint = dynamics_dales_constraint,
+                                list_of_dims=list_of_dims,
+                                region_identity = self.region_identity,
+                                infer_sign=self.infer_sign)
             self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
 
     def _laplace_em_elbo(self,
@@ -750,6 +757,7 @@ class SLDS(object):
                         alpha=0.5,
                         learning=True,
                         dynamics_dales_constraint=False,
+                        list_of_dims=[],
                         emission_block_diagonal=False,
                         ):
         """
@@ -784,7 +792,7 @@ class SLDS(object):
             if learning:
                 self._fit_laplace_em_params_update(
                     variational_posterior, datas, inputs, masks, tags,  emission_optimizer,\
-                          emission_optimizer_maxiter, alpha, dynamics_dales_constraint, emission_block_diagonal)
+                          emission_optimizer_maxiter, alpha, dynamics_dales_constraint, list_of_dims, emission_block_diagonal)
             
             if self.K==1:
                 elbos.append(self.log_probability(datas, inputs, masks, tags))
@@ -798,17 +806,6 @@ class SLDS(object):
             else:
                 elbos.append(self._laplace_em_elbo(
                 variational_posterior, datas, inputs, masks, tags, n_samples=num_samples))
-
-            # save model parameters
-            model_params = [self.dynamics.As[0], self.dynamics.Sigmas[0], self.emissions.Cs[0], self.emissions.inv_etas[0]]
-            # create a dict to save the model parameters
-            model_params = {}
-            model_params['A'] = self.dynamics.As[0]
-            model_params['Q'] = self.dynamics.Sigmas[0]
-            model_params['C'] = self.emissions.Cs[0]
-            model_params['R'] = self.emissions.inv_etas[0]
-            print("saving model parameters")
-            np.save('debugging/model_params_iter_'+str(i)+'.npy', model_params)
             
             if verbose == 2:
               pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
@@ -1067,9 +1064,13 @@ class LDS(SLDS):
             default_infer_sign = np.ones(N)
             default_infer_sign[N//2:] = -1  
             self.infer_sign = emission_kwargs['infer_sign'] if 'infer_sign' in emission_kwargs else default_infer_sign
-            warnings.warn("infer_sign not provided, assuming first 50% of neurons are excitatory and rest are inhibitory")
+            if emission_kwargs['infer_sign'] is None:
+                warnings.warn("infer_sign not provided, assuming first 50% of neurons are excitatory and rest are inhibitory")
             self.region_identity = emission_kwargs['region_identity'] if 'region_identity' in emission_kwargs else np.zeros(N)
-            warnings.warn("region_identity not provided, assuming all neurons are from the same region")
+            if emission_kwargs['region_identity'] is None:
+                warnings.warn("region_identity not provided, assuming all neurons are from the same region")
+
+        
 
         super().__init__(N, 1, D, M=M,
                          init_state_distn=init_state_distn,

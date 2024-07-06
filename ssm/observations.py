@@ -1137,7 +1137,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         return ExuxuTs, ExuyTs, EyyTs, Ens
     
 
-    def solve_dales_constrained_A(self, dynamics_dales_constraint, num_regions, ExuxuTs_k, ExuyTs_k, As_k, Vs_k, Sigmas_k):
+    def solve_dales_constrained_A(self, dynamics_dales_constraint, num_regions, list_of_dims, ExuxuTs_k, ExuyTs_k, As_k, Vs_k, Sigmas_k):
         """ to solve for a constrained A matrix using cvxpy"""
        
         D, M, lags = self.D, self.M, self.lags
@@ -1152,23 +1152,36 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
 
         # put dales law constraints on every region's A matrix
         constraints = []
-        D_per_region = D//num_regions
-        d_e = int(dynamics_dales_constraint*D_per_region)
+        partitions = len(list_of_dims)
+        list_of_dims = np.array(list_of_dims)
         for region in range(num_regions):
-            for i in range(D_per_region):
-                for j in range(D_per_region):
+            # let's get total number of dimensions in the region, as well as the number of dimensions that are excitatory
+            list_dims_this_region = list_of_dims[region*(partitions//num_regions):(region+1)*(partitions//num_regions)]
+            D_this_region = np.sum(list_dims_this_region)
+            if region==0:
+                 D_prev_regions=0 
+            else:
+                D_prev_regions = np.sum(list_of_dims[:region*(partitions//num_regions)]) # total num of dims prior to this region
+            d_e = list_dims_this_region[0]
+            for i in range(D_this_region):
+                for j in range(D_this_region):
                     if i!=j:
                         if i<d_e:
-                            constraints.append(W[j+(D_per_region*region),i+(D_per_region*region)]>=0)
+                            constraints.append(W[j+(D_prev_regions),i+(D_prev_regions)]>=0)
                         elif i>=d_e:
-                            constraints.append(W[j+(D_per_region*region),i+(D_per_region*region)]<=0)
+                            constraints.append(W[j+(D_prev_regions),i+(D_prev_regions)]<=0)
 
-        if num_regions==2: # cross-region constraints, assuming there are only two regions, 
-            # where one is in the cortex and the other is in the striatum 
-            constraints_cross_region = [W[0:D_per_region,D_per_region:D_per_region+d_e]>=0, \
-                                        W[D_per_region:2*D_per_region,0:d_e]>=0,\
-                                        W[0:D_per_region,D_per_region+d_e:2*D_per_region]<=0, \
-                                        W[D_per_region:2*D_per_region,d_e:D_per_region]==0]
+        if num_regions==2: # cross-region constraints, assuming there are only two regions,  where one is in the cortex and the other is in the striatum
+            # check if ADS has any E latents
+            D_fof = np.sum(list_of_dims[:2])
+            d_e_fof, d_e_ads = list_of_dims[0], list_of_dims[2]
+            if list_of_dims[2]>0:
+                constraints_cross_region = [W[0:D_fof,D_fof:D_fof+d_e_ads]>=0, \
+                                        W[D_fof:D,0:d_e_fof]>=0,\
+                                        W[0:D_fof,D_fof+d_e_ads:D]<=0, \
+                                        W[D_fof:D,d_e_fof:D_fof]==0]
+            else: # no constraints on ADS->FOF communication
+                constraints_cross_region = [W[D_fof:D,0:d_e_fof]>=0, W[D_fof:D,d_e_fof:D_fof]==0]
             constraints.extend(constraints_cross_region)
 
         Q_inv = np.linalg.inv(Sigmas_k) # get the inverse of Sigma
@@ -1219,7 +1232,10 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         dynamics_dales_constraint = kwargs.get('dynamics_dales_constraint', False)
         region_identity = kwargs.get('region_identity', None)
         num_regions = np.unique(region_identity).shape[0]
-        
+        list_of_dims = kwargs.get('list_of_dims', [D])
+
+        if dynamics_dales_constraint>0:
+            assert len(list_of_dims)==num_regions*2, "list of dims not defined correctly, should have length num_regions x num_cell_types"  # we have 2 cell types per region when enforcing dales law
         for k in range(K):
             ExuxuTs_k = ExuxuTs[k][:D*lags+M, :D*lags+M]
             ExuyTs_k = ExuyTs[k][:D*lags+M]
@@ -1227,7 +1243,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
             self.h0_k = self.h0[k][:D*lags+M]
 
             if dynamics_dales_constraint>0:   
-                Wk = self.solve_dales_constrained_A(dynamics_dales_constraint, num_regions, ExuxuTs_k, \
+                Wk = self.solve_dales_constrained_A(dynamics_dales_constraint, num_regions, list_of_dims, ExuxuTs_k, \
                                             ExuyTs_k, self.As[k], self.Vs[k], self.Sigmas[k])
             else:
                 Wk = np.linalg.solve(ExuxuTs_k + self.J0_k, ExuyTs_k + self.h0_k).T
@@ -1257,6 +1273,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         self.As = As
         self.Vs = Vs
         self.bs = bs
+        self._sqrt_Sigmas[0] = np.linalg.cholesky(Sigmas[0])
         self.Sigmas = Sigmas
 
     def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
