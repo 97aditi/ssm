@@ -810,7 +810,7 @@ class SLDS(object):
             if verbose == 2:
               pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
             # check for convergence
-            if np.abs(elbos[-1] - elbos[-2]) < 1e-4 and itr>5:
+            if np.abs(elbos[-1] - elbos[-2]) < 1e-7 and itr>5:
                 print("Converged at iteration {}".format(itr))
                 break
 

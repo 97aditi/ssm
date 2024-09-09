@@ -374,7 +374,30 @@ def fit_linear_regression(Xs, ys,
         # update C
         ExxT = ExxT + prior_ExxT
         W_full = solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, \
-                    current_etas, dynamics_dales_constraint, list_of_dims, infer_sign, region_identity)
+                    current_etas, dynamics_dales_constraint, infer_sign, latent_space_dim, region_identity)
+    # check if there are multiple region identities
+    elif len(np.unique(region_identity))>1:
+        ExxT = ExxT + prior_ExxT
+        # separate the emission matrix for each region
+        num_neurons = ExyT.shape[1]
+        W_full = np.zeros((num_neurons, ExxT.shape[0]))
+        region_ids = np.unique(region_identity).astype(int)
+        for region_id in region_ids:
+            idx_neurons_this_region = np.where(region_identity==region_id)[0]
+            ExxT_region = ExxT[region_id*latent_space_dim:(region_id+1)*latent_space_dim, region_id*latent_space_dim:(region_id+1)*latent_space_dim]
+            if fit_intercept:
+                ExxT_region = np.hstack((ExxT_region, ExxT[region_id*latent_space_dim:(region_id+1)*latent_space_dim, -1][:,None]))
+                last_row = np.zeros(latent_space_dim+1)
+                last_row[-1], last_row[:latent_space_dim] = ExxT[-1, -1], ExxT[-1, region_id*latent_space_dim:(region_id+1)*latent_space_dim]
+                ExxT_region = np.vstack((ExxT_region, last_row[None,:]))
+            ExyT_region = ExyT[region_id*latent_space_dim:(region_id+1)*latent_space_dim, idx_neurons_this_region]
+            if fit_intercept:
+                ExyT_region = np.concatenate((ExyT_region, [ExyT[-1, idx_neurons_this_region]]))
+
+            solution = np.linalg.solve(ExxT_region, ExyT_region).T
+            W_full[idx_neurons_this_region, region_id*latent_space_dim:(region_id+1)*latent_space_dim] = solution[:, :latent_space_dim]
+            if fit_intercept:
+                W_full[idx_neurons_this_region, -1] = solution[:, -1]   
     else:
         W_full = np.linalg.solve(ExxT, ExyT).T
         
