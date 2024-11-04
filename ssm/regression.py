@@ -44,7 +44,7 @@ def setup_constraints(W, dims_prev_cell_types, latent_space_dim, fit_intercept=T
     """Set constraints for the optimization problem."""
     constraints = []
     constraints.append(W[dims_prev_cell_types:dims_prev_cell_types + latent_space_dim] >= 0)
-    if dims_prev_cell_types + latent_space_dim < W.shape[0]-fit_intercept:
+    if dims_prev_cell_types + latent_space_dim < (W.shape[0]-fit_intercept):
         constraints.append(W[dims_prev_cell_types + latent_space_dim:W.shape[0]-fit_intercept] == 0)
     if dims_prev_cell_types > 0:
         constraints.append(W[:dims_prev_cell_types] == 0)

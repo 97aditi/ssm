@@ -513,13 +513,19 @@ class GaussianCellTypeEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         self.cell_identity = cell_identity  # defines the cell class identity of each neuron, 0 for unknown
         # assert that the cell identity is not None and contains non-negative integers
         assert self.cell_identity is not None, "Cell identity must be provided"
-        assert np.all(self.cell_identity >= 0), "Cell identity must be non-negative"
+        assert np.all(np.equal(np.mod(self.cell_identity, 1), 0)), "cell identity must be integers"
+        assert np.all(self.cell_identity >= 0), "cell identity must be non-negative"
+        if 0 in self.cell_identity:
+            print("Warning: cell identity contains 0, which is reserved for unknown cell types")
         self.region_identity = region_identity  # defines the region identity of each neuron, used to enforce block diagonal structure
         if self.region_identity is not None:
-            assert np.all(self.region_identity >= 0), "Region identity must be non-negative"
+            assert np.all(self.region_identity >= 0), "region identity must be non-negative"
+            assert np.all(np.equal(np.mod(self.region_identity, 1), 0)), "cell identity must be integers"
+            if np.min(self.region_identity) > 0:
+                self.region_identity  = self.region_identity - np.min(self.region_identity)
         else:
             self.region_identity = np.zeros(N, dtype=int)
-        self.list_of_dimensions = list_of_dimensions  # defines the dimensions of the latent space for each region
+        self.list_of_dimensions = list_of_dimensions.astype(int)  # defines the dimensions of the latent space for each region
 
     @ensure_args_are_lists
     def initialize(self, datas, inputs=None, masks=None, tags=None):

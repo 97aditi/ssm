@@ -1252,7 +1252,7 @@ class AutoRegressiveCellTypeObservations(AutoRegressiveObservations):
         super(AutoRegressiveCellTypeObservations, self).__init__(K, D, M, lags=lags)
         self.within_region_constraints = within_region_constrains or self._default_within_region_constraints # list of constraints to be enforced on the weights within regions
         self.across_region_constraints = across_region_constraints or self._default_across_region_constraints # list of constraints to be enforced on the weights across regions
-        self.list_of_dimensions = list_of_dimensions # list of dimensions of each region
+        self.list_of_dimensions = list_of_dimensions.astype(int) # list of dimensions of each region
         if within_region_constrains is None:
             print("Assuming Dale's constraints for the weights within regions")
         if across_region_constraints is None:
@@ -1311,6 +1311,8 @@ class AutoRegressiveCellTypeObservations(AutoRegressiveObservations):
         kron_ExuxuTs = np.kron((ExuxuTs_k+self.J0_k).T, np.eye(D))
 
         W = cp.Variable((D, D*lags+M))
+
+        # define the constraints
         constraints = self.within_region_constraints(W) + self.across_region_constraints(W)
 
         # define the objective function

@@ -731,7 +731,7 @@ class SLDS(object):
             
             if self.K==1:
                 elbos.append(self.log_probability(datas, inputs, masks, tags))
-                if isinstance(self.emissions, emssn.GaussianEmissions):
+                if isinstance(self.emissions, emssn.GaussianEmissions or emssn.GaussianCellTypeEmissions) and isinstance(self.dynamics, obs.AutoRegressiveObservations or obs.AutoRegressiveCellTypeObservations):
                     # this is exact log-likelihood, so it should not decrease
                     if elbos[-1] < elbos[-2]:
                         print("WARNING: LP has decreased by {} at iteration {}".format(elbos[-2]-elbos[-1], itr))
@@ -966,9 +966,9 @@ class LDS(SLDS):
                          emissions=emissions)
         # if either emissions or dynamics are celltype dependent, then we need to assign dimensionality to each cell-type and potentially each region
         if isinstance(self.emissions, emssn.GaussianCellTypeEmissions) or isinstance(self.dynamics, obs.AutoRegressiveCellTypeObservations):
-            self.list_of_dimensions = emission_kwargs['list_of_dimensions'] # this is a numpy array with num_regions x num_cell_types
+            self.list_of_dimensions = emission_kwargs['list_of_dimensions'].astype(int) # this is a numpy array with num_regions x num_cell_types
+            assert self.list_of_dimensions is not None, "list_of_dimensions must be provided"
             assert isinstance(self.list_of_dimensions, np.ndarray), "expected list_of_dimensions to be a numpy array of shape num_regions x num_cell_types"
-
     @ensure_slds_args_not_none
     def expected_states(self, variational_mean, data, input=None, mask=None, tag=None):
         return np.ones((variational_mean.shape[0], 1)), \
