@@ -1135,67 +1135,6 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
             ExuxuTs[k, -1, D:D + M] = ExuxuTs[k, D:D + M, -1].T
 
         return ExuxuTs, ExuyTs, EyyTs, Ens
-    
-
-    def solve_dales_constrained_A(self, dynamics_dales_constraint, num_regions, list_of_dims, ExuxuTs_k, ExuyTs_k, As_k, Vs_k, Sigmas_k):
-        """ to solve for a constrained A matrix using cvxpy"""
-       
-        D, M, lags = self.D, self.M, self.lags
-        assert lags==1, "Only lags==1 is supported for now"
-
-        W = cp.Variable((D,D+M)) # define a variable to solve for 
-        if M>0:
-            W_initial = np.concatenate((As_k, Vs_k), axis=1)
-        else:
-            W_initial =  As_k
-        W.value = W_initial # intialize the variable with the previous value
-
-        # put dales law constraints on every region's A matrix
-        constraints = []
-        partitions = len(list_of_dims)
-        list_of_dims = np.array(list_of_dims)
-        for region in range(num_regions):
-            # let's get total number of dimensions in the region, as well as the number of dimensions that are excitatory
-            list_dims_this_region = list_of_dims[region*(partitions//num_regions):(region+1)*(partitions//num_regions)]
-            D_this_region = np.sum(list_dims_this_region)
-            if region==0:
-                 D_prev_regions=0 
-            else:
-                D_prev_regions = np.sum(list_of_dims[:region*(partitions//num_regions)]) # total num of dims prior to this region
-            d_e = list_dims_this_region[0]
-            for i in range(D_this_region):
-                for j in range(D_this_region):
-                    if i!=j:
-                        if i<d_e:
-                            constraints.append(W[j+(D_prev_regions),i+(D_prev_regions)]>=0)
-                        elif i>=d_e:
-                            constraints.append(W[j+(D_prev_regions),i+(D_prev_regions)]<=0)
-
-        if num_regions==2: # cross-region constraints, assuming there are only two regions,  where one is in the cortex and the other is in the striatum
-            # check if ADS has any E latents
-            D_fof = np.sum(list_of_dims[:2])
-            d_e_fof, d_e_ads = list_of_dims[0], list_of_dims[2]
-            if list_of_dims[2]>0:
-                constraints_cross_region = [W[0:D_fof,D_fof:D_fof+d_e_ads]>=0, \
-                                        W[D_fof:D,0:d_e_fof]>=0,\
-                                        W[0:D_fof,D_fof+d_e_ads:D]<=0, \
-                                        W[D_fof:D,d_e_fof:D_fof]==0]
-            else: # no constraints on ADS->FOF communication
-                constraints_cross_region = [W[D_fof:D,0:d_e_fof]>=0, W[D_fof:D,d_e_fof:D_fof]==0]
-            constraints.extend(constraints_cross_region)
-
-        Q_inv = np.linalg.inv(Sigmas_k) # get the inverse of Sigma
-        Q_inv = Q_inv/np.max(np.abs(Q_inv)) # for numerical stability
-        L = np.linalg.cholesky(Q_inv) # perform a cholesky decomposition
-        kron_ExuxuTs = np.kron((ExuxuTs_k+self.J0_k).T, np.eye(D))
-        # define the objective function
-        objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs_k+self.h0_k)))
-        prob = cp.Problem(objective, constraints)
-        prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True,) # solve the problem
-        if prob.status != 'optimal': # check if the problem is solved
-            print("Warning: M step for A failed to converge!")
-        Wk = W.value
-        return Wk
 
 
     def m_step(self, expectations, datas, inputs, masks, tags,
@@ -1227,26 +1166,14 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         Vs = np.zeros((K, D, M))
         bs = np.zeros((K, D))
         Sigmas = np.zeros((K, D, D))
-
-        # check if there are constraints on the dynamics
-        dynamics_dales_constraint = kwargs.get('dynamics_dales_constraint', False)
-        region_identity = kwargs.get('region_identity', None)
-        num_regions = np.unique(region_identity).shape[0]
-        list_of_dims = kwargs.get('list_of_dims', [D])
-
-        if dynamics_dales_constraint>0:
-            assert len(list_of_dims)==num_regions*2, "list of dims not defined correctly, should have length num_regions x num_cell_types"  # we have 2 cell types per region when enforcing dales law
+        
         for k in range(K):
             ExuxuTs_k = ExuxuTs[k][:D*lags+M, :D*lags+M]
             ExuyTs_k = ExuyTs[k][:D*lags+M]
             self.J0_k = self.J0[k][:D*lags+M, :D*lags+M]
             self.h0_k = self.h0[k][:D*lags+M]
 
-            if dynamics_dales_constraint>0:   
-                Wk = self.solve_dales_constrained_A(dynamics_dales_constraint, num_regions, list_of_dims, ExuxuTs_k, \
-                                            ExuyTs_k, self.As[k], self.Vs[k], self.Sigmas[k])
-            else:
-                Wk = np.linalg.solve(ExuxuTs_k + self.J0_k, ExuyTs_k + self.h0_k).T
+            Wk = np.linalg.solve(ExuxuTs_k + self.J0_k, ExuyTs_k + self.h0_k).T
                 
             As[k] = Wk[:, :D * lags]
             Vs[k] = Wk[:, D * lags:D*lags+M]
@@ -1276,11 +1203,8 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         self._sqrt_Sigmas[0] = np.linalg.cholesky(Sigmas[0])
         self.Sigmas = Sigmas
 
-    def sample_x(self, z, xhist, input=None, tag=None, with_noise=True, seed=1):
+    def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
         D, As, bs, Vs = self.D, self.As, self.bs, self.Vs
-
-        # seed noise
-        npr.seed(seed)
 
         if xhist.shape[0] < self.lags:
             # Sample from the initial distribution
@@ -1319,6 +1243,150 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         J_dyn_21 = -1 * np.sum(Ez[1:,:,None,None] * off_diag_terms[None,:], axis=1)
 
         return J_ini, J_dyn_11, J_dyn_21, J_dyn_22
+    
+
+class AutoRegressiveCellTypeObservations(AutoRegressiveObservations):
+    """ AutoRegressive observation model with Gaussian noise, where the weights are constrained by cell type"""
+
+    def __init__(self, K, D, M=0, lags=1, within_region_constrains=None, across_region_constraints=None, list_of_dimensions=None, **kwargs):
+        super(AutoRegressiveCellTypeObservations, self).__init__(K, D, M, lags=lags)
+        self.within_region_constraints = within_region_constrains or self._default_within_region_constraints # list of constraints to be enforced on the weights within regions
+        self.across_region_constraints = across_region_constraints or self._default_across_region_constraints # list of constraints to be enforced on the weights across regions
+        self.list_of_dimensions = list_of_dimensions # list of dimensions of each region
+        if within_region_constrains is None:
+            print("Assuming Dale's constraints for the weights within regions")
+        if across_region_constraints is None:
+            print("Assuming FOF-ADS cross-region constraints if 2 regions, otherwise no cross-region constraints")
+
+    def _default_within_region_constraints(self, W):
+        """ setup Dale's constraints for the weights W assuming E and I cell classes """
+        M, lags = self.M, self.lags
+        assert lags == 1, "Only lags==1 is supported for now"
+        list_of_dimensions = self.list_of_dimensions
+        within_region_constraints = []
+
+        num_regions = list_of_dimensions.shape[0]
+        for region in range(num_regions):
+            dims_this_region = list_of_dimensions[region]
+            assert len(dims_this_region)==2, "assuming E and I cell-types by default, but this list has either less than or more than 2 elements"
+            D_e, D_i = dims_this_region[0], dims_this_region[1]
+            dims_prev_regions = np.sum(list_of_dimensions[:region]) if region > 0 else 0
+            # all excitatory columns should be positive and all inhibitory columns should be negative, except the diagonal elements
+            for i in range(D_e + D_i):
+                for j in range(D_e + D_i):
+                    if i != j:
+                        if i < D_e:
+                            within_region_constraints.append(W[j + dims_prev_regions, i + dims_prev_regions] >= 0)
+                        elif i >= D_e:
+                            within_region_constraints.append(W[j + dims_prev_regions, i + dims_prev_regions] <= 0)
+        return within_region_constraints
+    
+
+    def _default_across_region_constraints(self, W):
+        """ Setup Dale's constraints for the weights W assuming E and I cell classes, and cross-region constraints """
+            
+        list_of_dimensions = self.list_of_dimensions
+        num_regions = len(list_of_dimensions)
+        total_latents = np.sum(list_of_dimensions)
+        across_region_constraints = []
+        
+        # cross-region constraints, assuming there are only two regions, where one is in the cortex and the other is in the striatum (FOF and ADS, as in the paper)
+        if num_regions == 2:
+            latents_region_1 = np.sum(list_of_dimensions[0])
+            d_e_region_1, _ = list_of_dimensions[0]
+            across_region_constraints = [W[latents_region_1:total_latents, 0:d_e_region_1]>=0, W[latents_region_1:total_latents, d_e_region_1:latents_region_1]==0] # only constraining FOF->ADS connections to be excitatory
+
+        return across_region_constraints    
+
+    def _solve_constrained_A(self, k, ExuxuTs_k, ExuyTs_k, Sigmas_k):
+        """ to solve for a constrained A matrix using cvxpy"""
+       
+        D, M, lags = self.D, self.M, self.lags
+        assert lags==1, "Only lags==1 is supported for now"
+   
+
+        Q_inv = np.linalg.inv(Sigmas_k) # get the inverse of Sigma
+        Q_inv = Q_inv/np.max(np.abs(Q_inv)) # for numerical stability
+        L = np.linalg.cholesky(Q_inv) # perform a cholesky decomposition
+        kron_ExuxuTs = np.kron((ExuxuTs_k+self.J0_k).T, np.eye(D))
+
+        W = cp.Variable((D, D*lags+M))
+        constraints = self.within_region_constraints(W) + self.across_region_constraints(W)
+
+        # define the objective function
+        objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExuxuTs) - 2*cp.trace(Q_inv@W@(ExuyTs_k+self.h0_k)))
+        prob = cp.Problem(objective, constraints)
+        prob.solve(solver = cp.MOSEK, verbose = False, warm_start = True,) # solve the problem
+        if prob.status != 'optimal': # check if the problem is solved
+            print("Warning: M step for A failed to converge!")
+        Wk = W.value
+        return Wk
+    
+    def m_step(self, expectations, datas, inputs, masks, tags,
+               continuous_expectations=None, **kwargs):
+        """Compute M-step for Gaussian Auto Regressive Observations.
+
+        If `continuous_expectations` is not None, this function will
+        compute an exact M-step using the expected sufficient statistics for the
+        continuous states. In this case, we ignore the prior provided by (J0, h0),
+        because the calculation is exact. `continuous_expectations` should be a tuple of
+        (Ex, Ey, ExxT, ExyT, EyyT).
+
+        If `continuous_expectations` is None, we use `datas` and `expectations,
+        and (optionally) the prior given by (J0, h0). In this case, we estimate the sufficient
+        statistics using `datas,` which is typically a single sample of the continuous
+        states from the posterior distribution.
+        """
+        K, D, M, lags = self.K, self.D, self.M, self.lags
+
+        # Collect sufficient statistics
+        if continuous_expectations is None:
+            ExuxuTs, ExuyTs, EyyTs, Ens = self._get_sufficient_statistics(expectations, datas, inputs)
+        else:
+            ExuxuTs, ExuyTs, EyyTs, Ens = \
+                self._extend_given_sufficient_statistics(expectations, continuous_expectations, inputs)
+
+        # Solve the linear regressions
+        As = np.zeros((K, D, D * lags))
+        Vs = np.zeros((K, D, M))
+        bs = np.zeros((K, D))
+        Sigmas = np.zeros((K, D, D))
+        
+        for k in range(K):
+            ExuxuTs_k = ExuxuTs[k][:D*lags+M, :D*lags+M]
+            ExuyTs_k = ExuyTs[k][:D*lags+M]
+            self.J0_k = self.J0[k][:D*lags+M, :D*lags+M]
+            self.h0_k = self.h0[k][:D*lags+M]
+
+            Wk = self._solve_constrained_A(k, ExuxuTs_k, \
+                                            ExuyTs_k, self.Sigmas[k])
+            As[k] = Wk[:, :D * lags]
+            Vs[k] = Wk[:, D * lags:D*lags+M]
+            bs[k] = np.zeros(D) 
+
+            # Solve for the MAP estimate of the covariance
+            EWxyT =  Wk @ ExuyTs_k
+            sqerr = EyyTs[k] - EWxyT.T - EWxyT + Wk @ ExuxuTs_k @ Wk.T
+            nu = self.nu0 + Ens[k]
+            Sigmas[k] = (sqerr + self.Psi0) / (nu + D + 1) 
+
+        # If any states are unused, set their parameters to a perturbation of a used state
+        unused = np.where(Ens < 1)[0]
+        used = np.where(Ens > 1)[0]
+        if len(unused) > 0:
+            for k in unused:
+                i = npr.choice(used)
+                As[k] = As[i] + 0.01 * npr.randn(*As[i].shape)
+                Vs[k] = Vs[i] + 0.01 * npr.randn(*Vs[i].shape)
+                bs[k] = bs[i] + 0.01 * npr.randn(*bs[i].shape)
+                Sigmas[k] = Sigmas[i]
+
+        # Update parameters via their setter
+        self.As = As
+        self.Vs = Vs
+        self.bs = bs
+        self._sqrt_Sigmas[0] = np.linalg.cholesky(Sigmas[0])
+        self.Sigmas = Sigmas
 
 
 class AutoRegressiveObservationsNoInput(AutoRegressiveObservations):

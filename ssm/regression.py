@@ -4,15 +4,12 @@ General purpose classes for (generalized) linear regression observation models.
 from autograd import elementwise_grad
 import autograd.numpy as np
 import autograd.numpy.random as npr
-from autograd.scipy.linalg import block_diag
 from autograd.scipy.special import logsumexp, gammaln
 from scipy.special import polygamma, digamma
 from scipy.optimize import minimize
 from warnings import warn
 from ssm.util import check_shape
 import cvxpy as cp
-from joblib import Parallel, delayed
-import multiprocessing
 
 mean_functions = dict(
     identity=lambda x: x,
@@ -41,275 +38,197 @@ model_kwarg_descriptions = dict(
     poisson=dict(),
     negative_binomial=dict(r="The \"number of failures\" parameterizing the negative binomial distribution.")
     )
+        
 
+def setup_constraints(W, dims_prev_cell_types, latent_space_dim, fit_intercept=True):
+    """Set constraints for the optimization problem."""
+    constraints = []
+    constraints.append(W[dims_prev_cell_types:dims_prev_cell_types + latent_space_dim] >= 0)
+    if dims_prev_cell_types + latent_space_dim < W.shape[0]-fit_intercept:
+        constraints.append(W[dims_prev_cell_types + latent_space_dim:W.shape[0]-fit_intercept] == 0)
+    if dims_prev_cell_types > 0:
+        constraints.append(W[:dims_prev_cell_types] == 0)
+    return constraints
 
-def solve_regression_for_unknown_cells(ExxT, ExyT, fit_intercept, initial_C, \
-                                       etas, dynamics_dales_constraint, infer_sign, latent_space_dim):
-    """ learn the emission matrix C with block-sparse constraints \
-        for cells whose identities is unknown """
-    # let's get the indices of unknown cells
-    unknown_cells = np.where(infer_sign == 0)[0].astype(int)
-    # get the dimension of the latent space
-    d_e = int(dynamics_dales_constraint*latent_space_dim)
-    # let's get ExyT corresponding to unknown cells
-    ExyT = ExyT[:, unknown_cells]
-    C_unknown = np.zeros((len(unknown_cells), ExxT.shape[0]))
-
-    # now for each unknown cell, we will learn the sign separately and solve for C separately 
-    for i in range(len(unknown_cells)):
-        # let's initialize the emission matrix for the unknown cell
-        W = cp.Variable((ExxT.shape[0]))
-        # let's get the ExyT corresponding to the unknown cell
-        ExyT_i = ExyT[:, i]
-        # we will solve two problems, one for positive sign and one for negative sign
-        # add constraints such that W is block sparse and non negative
-        constraints_e = [W[:d_e]>=0, W[d_e:latent_space_dim]==0]
-        constraints_i = [W[d_e:latent_space_dim]>=0, W[:d_e]==0]
-        objective = cp.Minimize(cp.quad_form((W).flatten(), ExxT) - 2*W.T@ExyT_i)
-        prob = cp.Problem(objective, constraints_e)
-        prob.solve(solver=cp.MOSEK, verbose=True, warm_start=False,)
-        # check if the problem is solved
-        if prob.status != 'optimal':
-            print("Warning: M step for C unknown failed to converge!")
-        # get the error
-        error_e = prob.value
-        W_e = W.value
-        # solve the problem with the other set of constraints, reset value
-        prob = cp.Problem(objective, constraints_i)
-        prob.solve(solver=cp.MOSEK, verbose=False, warm_start=False,)
-        # check if the problem is solved
-        if prob.status != 'optimal':
-            print("Warning: M step for C unknown failed to converge!")
-        # get the error
-        error_i = prob.value
-        W_i = W.value
-        # compare the errors and choose the sign with lower error
-        if error_e < error_i:
-            C_unknown[i, :] = W_e
-        else:
-            C_unknown[i, :] = W_i
-    # let's return the emission matrix
-    return C_unknown
-            
-def solve_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas, dynamics_dales_constraint, \
-                           infer_sign, latent_space_dim):
-    """ learn the emission matrix C with block-sparse constraints"""
-    # let's get the indices of the excitatory and inhibitory cells
-    e_cells = np.where(infer_sign == 1)[0].astype(int)
-    i_cells = np.where(infer_sign == -1)[0].astype(int)
-    unknown_cells = np.where(infer_sign == 0)[0].astype(int)
-
-    # if unknown cells exist, we will learn the sign of the unknown cells separately
-    # first remove columns from ExyT corresponding to unknown cells
-    if len(unknown_cells)>0:
-        ExyT_known = ExyT[:, np.concatenate((e_cells, i_cells))]
-        infer_sign_new = infer_sign[np.concatenate((e_cells, i_cells))]
-        # get new e and i cell indices
-        new_e_cells = np.where(infer_sign_new == 1)[0].astype(int)
-        new_i_cells = np.where(infer_sign_new == -1)[0].astype(int)
-    else:
-        ExyT_known = ExyT
-        new_e_cells = e_cells
-        new_i_cells = i_cells
-
-    # get the dimension of the latent space 
-    d_e = int(dynamics_dales_constraint*latent_space_dim)
-
-    W = cp.Variable((ExyT_known.shape[1], ExxT.shape[0]))
-    W.value = initial_C
-    # add constraints such that W is block sparse and non negative
-    
-    constraints = [W[new_e_cells,:][:,:d_e]>=0, W[new_e_cells,:][:,d_e:latent_space_dim]==0, \
-                   W[new_i_cells, :][:,(latent_space_dim-d_e):latent_space_dim]>=0, \
-                   W[new_i_cells, :][:, :(latent_space_dim-d_e)]==0]
-
-    assert len(unknown_cells)==0, "M step currently does not work for unknown cells"
-    R_inv = np.linalg.inv(etas)
-    # let's find the maximum absolute value of an element in R_inv
-    max_abs = np.max(np.abs(R_inv))
-    # Let's scale R_inv by max_abs, to keep the problem bounded and \
-    # avoid numerical issues; it doesn' affect the solution per se
-    R_inv = R_inv/max_abs
-    L = np.linalg.cholesky(R_inv)
-    kron_ExxT = np.kron(ExxT.T, np.eye(len(infer_sign)))
-    # add the objective function
-    objective = cp.Minimize(cp.quad_form((L.T@W).flatten(), kron_ExxT) - 2*cp.trace(R_inv@W@ExyT_known))
-    # solve the problems
-    prob = cp.Problem(objective, constraints)
-    prob.solve(solver=cp.MOSEK, verbose=False, warm_start=True,)
-    # check if the problem is solved
-    if prob.status != 'optimal':
-        print("Warning: M step for C failed to converge!")
-
-    # solve regression for unknown cells
-    if len(unknown_cells)>0:
-        W_unknown = solve_regression_for_unknown_cells(ExxT, ExyT, fit_intercept, initial_C, \
-                        etas, dynamics_dales_constraint, infer_sign, latent_space_dim)
-        # let's put the emission matrix back together
-        W_full = np.zeros((infer_sign.shape[0], ExxT.shape[0]))
-        W_full[np.concatenate((e_cells, i_cells)), :] = W.value
-        W_full[unknown_cells, :] = W_unknown
-        return W_full
-    else:
-        return W.value
-    
-
-def solve_unknown_neuron_C(cell_id, ExxT_region, ExyT_i, dynamics_dales_constraint, list_of_dims, initial_C_i, fit_intercept):
-    """solve for the row of C corresponding to this one unknown neuron"""
-
-    # this neuron can be excitatory or inhibitory
-    prob_val = []
+def solve_unknown_neuron_C(ExxT_region, ExyT_i, list_dims_region, fit_intercept):
+    """Solve for the row of C for an unknown neuron (identity unknown)."""
+    prob_vals = []
     Ws = []
-    d_e = list_of_dims[0]
-    latent_space_dim = np.sum(list_of_dims)
-    assert d_e>0 and d_e<latent_space_dim, "this unknown neuron has either only E or only I latents, identity inference wouldn't work"
 
-    for i in range(2):
-        if i==0:
-            W = cp.Variable((latent_space_dim+fit_intercept))
-            # assume the neuron is excitatory
-            constraints = [W[:d_e]>=0, W[d_e:latent_space_dim]==0]
-        else:
-            # assume the neuron is inhibitory
-            W = cp.Variable((latent_space_dim+fit_intercept))
-            constraints = [W[d_e:latent_space_dim]>=0, W[:d_e]==0]
-        # add the objective function
-        objective = cp.Minimize(cp.quad_form((W).flatten(), ExxT_region) - 2*W.T@ExyT_i)
-        # solve the problems
+    for i, latent_space_dim in enumerate(list_dims_region):
+        if latent_space_dim == 0:
+            continue
+
+        dims_prev_cell_types = sum(list_dims_region[:i])
+        W = cp.Variable(latent_space_dim + fit_intercept)
+        constraints = setup_constraints(W, dims_prev_cell_types, latent_space_dim, fit_intercept)
+        
+        objective = cp.Minimize(cp.quad_form(W.flatten(), ExxT_region) - 2 * W.T @ ExyT_i)
         prob = cp.Problem(objective, constraints)
-        prob.solve(solver=cp.MOSEK, verbose=False,)
-        # check if the problem is solved
+        prob.solve(solver=cp.MOSEK, verbose=False)
+        
         if prob.status != 'optimal':
-            print("Warning: M step for C unknown failed to converge!")
-        # get the emission matrix
+            print("Warning: Optimization failed for unknown neuron.")
+
         Ws.append(W.value)
-        prob_val.append(prob.value)
-    # check which sign gives lower error
-    if prob_val[0]<prob_val[1]:
-        print("neuron "+str(cell_id)+" is excitatory: ", prob_val[0], prob_val[1])
-        W_i = Ws[0]
-        return W_i
-    else:
-        print("neuron "+str(cell_id)+" is inhibitory: ", prob_val[0], prob_val[1])
-        W_i = Ws[1]
-        return W_i
-    
+        prob_vals.append(prob.value)
 
-def solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, etas,\
-                         dynamics_dales_constraint, list_of_dims, infer_sign, region_identities):
-    """ learn each row of the C matrix separately, this may speed up inference \
-        as optimization will now happen over a much smaller d-dimensional space, aditionally, \
-        we can infer identities of unknown cells using this approach """
-    # Caveat: this assumes R to be diagonal
+    # Select the solution with minimum error
+    return Ws[np.argmin(prob_vals)]
 
+
+def solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C,list_of_dims, region_identities, cell_identity):
+    """ learn each row of the C matrix separately assuming R is diagonal, this speeds up inference as optimization now happen over a much smaller d-dimensional space, aditionally, we can infer identities of unknown cells using this approach """
+
+    # get the dimensions 
     num_neurons = ExyT.shape[1]
     W = np.zeros((num_neurons, ExxT.shape[0]))
     
     # now let's go over each neuron and solve the regression problem specific to its region
     for i in range(num_neurons):
+        # get the region identity of this neuron
         region_id = region_identities[i].astype(int)
-        latent_space_dim = np.sum(list_of_dims[region_id*2:(region_id+1)*2]) # since we have 2 cell types
-        d_prev_regions = 0
-        if region_id>0: d_prev_regions=np.sum(list_of_dims[:region_id*2])
-        list_dims_this_region = list_of_dims[region_id*2:(region_id+1)*2]
-        
-        ExxT_region = ExxT[d_prev_regions:d_prev_regions + latent_space_dim, d_prev_regions:d_prev_regions + latent_space_dim]
+        dims_this_region = sum(list_of_dims[region_id])
+        dims_prev_regions = np.sum(list_of_dims[:region_id,:]) if region_id>0 else 0
+
+        # extract latent space expectations specific to this region, and neurons
+        ExxT_region = ExxT[dims_prev_regions:dims_prev_regions+dims_this_region, dims_prev_regions:dims_prev_regions+dims_this_region]
+        ExyT_neuron = ExyT[dims_prev_regions:dims_prev_regions+dims_this_region, i]
+
         if fit_intercept:
-            ExxT_region = np.hstack((ExxT_region, ExxT[d_prev_regions:d_prev_regions+latent_space_dim, -1][:,None]))
-            last_row = np.zeros(latent_space_dim+1)
-            last_row[-1], last_row[:latent_space_dim] = ExxT[-1, -1], ExxT[-1, d_prev_regions:d_prev_regions+latent_space_dim]
+            # add an extra row and column for the intercept / bias ter,
+            ExxT_region = np.hstack((ExxT_region, ExxT[dims_prev_regions:dims_prev_regions+dims_this_region, -1][:,None]))
+            last_row = np.hstack((ExxT[-1, dims_prev_regions:dims_prev_regions + dims_this_region], ExxT[-1, -1]))
             ExxT_region = np.vstack((ExxT_region, last_row[None,:]))
-        ExyT_neuron = ExyT[d_prev_regions:d_prev_regions + latent_space_dim, i]
-        if fit_intercept:
             ExyT_neuron = np.concatenate((ExyT_neuron, [ExyT[-1, i]]))
-        # E-I constraints
-        if infer_sign[i]==0:
+        
+        if cell_identity[i]==0 and np.count_nonzero(list_of_dims[region_id])>1:
+            # if cell identity for this neuron is not known (0 is for unknown cells), and there are multiple cell types
             print("solving for unknown neuron  ", i)
-            if fit_intercept:
-                init_val = np.zeros(latent_space_dim+1)
-                init_val[:latent_space_dim], init_val[-1] = initial_C[i, d_prev_regions:d_prev_regions+latent_space_dim], initial_C[i,-1]
-                initial_value = init_val
-            else:
-                initial_value = initial_C[i, d_prev_regions:d_prev_regions+latent_space_dim]
             W_i = \
-                solve_unknown_neuron_C(i, ExxT_region, ExyT_neuron, dynamics_dales_constraint, list_dims_this_region, initial_value, fit_intercept)
+                solve_unknown_neuron_C(ExxT_region, ExyT_neuron, list_of_dims[region_id], fit_intercept)
         else:
-            W_i = cp.Variable((latent_space_dim+fit_intercept))
+            # solve constrained regression to get the row of C corresponding to this neuron called W_i here        
+            W_i = cp.Variable((dims_this_region+fit_intercept))
             if fit_intercept:
-                init_val = np.zeros(latent_space_dim+1)
-                init_val[:latent_space_dim], init_val[-1] = initial_C[i, d_prev_regions:d_prev_regions+latent_space_dim], initial_C[i,-1]
-                W_i.value = init_val
+                W_i.value = np.append(initial_C[i, dims_prev_regions:dims_prev_regions + dims_this_region], initial_C[i, -1])
             else:
-                W_i.value = initial_C[i, d_prev_regions:d_prev_regions+latent_space_dim]
+                W_i.value = initial_C[i, dims_prev_regions:dims_prev_regions + dims_this_region]
             
-            # check if the cell is excitatory or inhibitory
-            d_e = list_dims_this_region[0]
-            if infer_sign[i]==1:
-                # add constraints such that W is block sparse and non negative
-                if d_e==latent_space_dim: # if there are no I latents, in the case where this region only has E cells
-                    constraints = [W_i[:d_e]>=0]
-                else:
-                    constraints = [W_i[:d_e]>=0, \
-                            W_i[d_e:latent_space_dim]==0]
-               
-            elif infer_sign[i]==-1:
-                if d_e==0: # if there are no E latents, in the case where this region only has I cells
-                    constraints = [W_i[d_e:latent_space_dim]>=0]
-                else:
-                    constraints = [W_i[d_e:latent_space_dim]>=0, \
-                            W_i[:d_e]==0]
-                
-            # add the objective function
-            objective = cp.Minimize(cp.quad_form((W_i).flatten(), ExxT_region) - 2*W_i.T@ExyT_neuron)
-            # solve the problems
-            prob = cp.Problem(objective, constraints)
-            prob.solve(solver=cp.MOSEK, verbose=False, warm_start=True,)
-            # check if the problem is solved
-            if prob.status != 'optimal':
-                print("Warning: M step for C failed to converge!")
-        # get the emission matrix
-        if infer_sign[i]==0:
-            W[i, d_prev_regions:d_prev_regions+latent_space_dim] = W_i[:latent_space_dim]
-            if fit_intercept:
-                W[i, -1] = W_i[-1]
-        else:
-            W[i, d_prev_regions:d_prev_regions+latent_space_dim] = W_i.value[:latent_space_dim]
-            if fit_intercept:
-                W[i, -1] = W_i.value[-1]
+            # check cell identity and corresponding number of latent dims
+            cell_identity_this_cell = cell_identity[i]
+            try:
+                latent_space_dim = list_of_dims[region_id][cell_identity_this_cell-1]
+            except:
+                latent_space_dim = list_of_dims[region_id][0]
+                print("Warning: latent space dims not found for cell ", i, " in region ", region_id)
+            dims_prev_cell_types_this_region = sum(list_of_dims[region_id,:(cell_identity_this_cell-1)]) if cell_identity_this_cell>1 else 0
+
+            # add constraints based on cell identity 
+            if latent_space_dim>0:
+                constraints = setup_constraints(W_i, dims_prev_cell_types_this_region, latent_space_dim, fit_intercept)
+                # add the objective function
+                objective = cp.Minimize(cp.quad_form((W_i).flatten(), ExxT_region) - 2*W_i.T@ExyT_neuron)
+                # solve the problem
+                prob = cp.Problem(objective, constraints)
+                prob.solve(solver=cp.MOSEK, verbose=False, warm_start=True,)
+                # check if the problem is solved
+                if prob.status != 'optimal':
+                    print("Warning: M step for C failed to converge!")
+        
+        # put together the emission matrix 
+        W[i, dims_prev_regions:dims_prev_regions+dims_this_region] = W_i.value[:dims_this_region]
+        if fit_intercept:
+            W[i, -1] = W_i.value[-1]
     return W
 
+def fit_constrained_linear_regression(Xs, ys, expectations, list_of_dims, region_identity, cell_identity, weights=None, fit_intercept=True, Psi0=1, nu0=1, prior_ExxT=None, prior_ExyT=None, initial_C=None):
+    """ Fit a linear regression model with constrained C matrix (positive and block diagonal) per the CTDS model
+    Params
+    ------
+    Xs: array or list of arrays, each element is N x D,
+        where N is the number of data points, and D is the
+        dimension of x_i.
+    ys: array or list of arrays, each element is N x P,
+        where p is the dimension of y_i.
+    weights: optional, list of scalars weighting each observation.
+                Must be same length as Xs and ys.
+    fit_intercept:  if False drop b.
+    expectations: optional, tuple of sufficient statistics for the
+                    regression. If provided, Xs and ys will be ignored,
+                    and the regression is calculated only from the
+                    sufficient statistics. Tuple should be of the form
+                    (Exx, Exy, Eyy, weight_sum).
+    prior_ExxT: D x D array.
+    prior_ExyT: D x P array. optional. Only used when expectations=None.
+    nu0: prior on covariance from MNIW distribution.
+    psi0: prior on covariance from MNIW distribution.
 
-def solve_multi_region_lds_regression(ExxT, ExyT, region_identity, list_of_dims, prior_ExxT):
-    """ solve regression in case of LDS model with separate latents per region but no other constraints """
+    Returns
+    -------
+    W, b, Sigmas: when fit_intercept=True.
+    W, Sigmas: when fit_intercept=False.
+    """
 
-    # get expectations
-    ExxT = ExxT + prior_ExxT
-    # separate the emission matrix for each region
-    num_neurons = ExyT.shape[1]
-    W_full = np.zeros((num_neurons, ExxT.shape[0]))
-    region_ids = np.unique(region_identity).astype(int)
+    Xs = Xs if isinstance(Xs, (list, tuple)) else [Xs]
+    ys = ys if isinstance(ys, (list, tuple)) else [ys]
+    assert len(Xs) == len(ys)
 
-    assert list_of_dims[0]==list_of_dims[1], "multi-region LDS code currently cannot handle different latents per region, should fix soon"
+    p, d = Xs[0].shape[1], ys[0].shape[1]
+    assert all([X.shape[1] == p for X in Xs])
+    assert all([y.shape[1] == d for y in ys])
+    assert all([X.shape[0] == y.shape[0] for X, y in zip(Xs, ys)])
 
-    for region_id in region_ids:
-        latent_space_dim = list_of_dims[region_id]
-        idx_neurons_this_region = np.where(region_identity==region_id)[0]
-        ExxT_region = ExxT[region_id*latent_space_dim:(region_id+1)*latent_space_dim, region_id*latent_space_dim:(region_id+1)*latent_space_dim]
+    # Check the weights.  Default to all ones.
+    if weights is not None:
+        weights = weights if isinstance(weights, (list, tuple)) else [weights]
+    else:
+        weights = [np.ones(X.shape[0]) for X in Xs]
 
-        if fit_intercept:
-            ExxT_region = np.hstack((ExxT_region, ExxT[region_id*latent_space_dim:(region_id+1)*latent_space_dim, -1][:,None]))
-            last_row = np.zeros(latent_space_dim+1)
-            last_row[-1], last_row[:latent_space_dim] = ExxT[-1, -1], ExxT[-1, region_id*latent_space_dim:(region_id+1)*latent_space_dim]
-            ExxT_region = np.vstack((ExxT_region, last_row[None,:]))
-        ExyT_region = ExyT[region_id*latent_space_dim:(region_id+1)*latent_space_dim, idx_neurons_this_region]
-        if fit_intercept:
-            ExyT_region = np.concatenate((ExyT_region, [ExyT[-1, idx_neurons_this_region]]))
+    x_dim = p + int(fit_intercept)
+    ExxT = np.zeros((x_dim, x_dim))
+    ExyT = np.zeros((x_dim, d))
+    EyyT = np.zeros((d, d))
 
-        solution = np.linalg.solve(ExxT_region, ExyT_region).T
-        W_full[idx_neurons_this_region, region_id*latent_space_dim:(region_id+1)*latent_space_dim] = solution[:, :latent_space_dim]
-        if fit_intercept:
-            W_full[idx_neurons_this_region, -1] = solution[:, -1]   
-    return W_full
+    weight_sum = 0
+    if expectations is None:
+        # Compute the posterior. The priors must include a prior for the
+        # intercept term, if given.
+        if prior_ExxT is not None and prior_ExyT is not None:
+            check_shape(prior_ExxT, "prior_ExxT", (x_dim, x_dim))
+            check_shape(prior_ExyT, "prior_ExyT", (x_dim, d))
+            ExxT[:, :] = prior_ExxT
+            ExyT[:, :] = prior_ExyT
+
+        for X, y, weight in zip(Xs, ys, weights):
+            X = np.column_stack((X, np.ones(X.shape[0]))) if fit_intercept else X
+            weight_sum += np.sum(weight)
+            weight = weight[:, None] if weight.ndim == 1 else weight
+            weighted_x = X * weight
+            weighted_y = y * weight
+            ExxT += weighted_x.T @ X
+            ExyT += weighted_x.T @ y
+            EyyT += weighted_y.T @ y
+    else:
+        ExxT, ExyT, EyyT, weight_sum = expectations
+        check_shape(ExxT, "ExxT", (x_dim, x_dim))
+        check_shape(ExyT, "ExyT", (x_dim, d))
+        check_shape(EyyT, "EyyT", (d, d))
+        if prior_ExxT is not None:
+            ExxT = ExxT + prior_ExxT # add the prior, helpful for CTDS
+
+    W_full = solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, list_of_dims, region_identity, cell_identity)
+
+    # Compute expected error for covariance matrix estimate
+    expected_err = EyyT - W_full @ ExyT - ExyT.T @ W_full.T + W_full @ ExxT @ W_full.T
+    # Get MAP estimate of posterior covariance
+    Sigma = (expected_err + Psi0 * np.eye(d)) / (nu0 + weight_sum + d + 1)
+    Sigma = np.diag(np.diag(Sigma)) # force sigma to be diagonal
+
+    if fit_intercept:
+        return W_full[:, :-1], W_full[:, -1], Sigma
+    else:
+        return W_full, Sigma                       
 
 
 def fit_linear_regression(Xs, ys,
@@ -320,13 +239,6 @@ def fit_linear_regression(Xs, ys,
                           prior_ExyT=None,
                           nu0=1,
                           Psi0=1,
-                          block_diagonal = False,
-                          dynamics_dales_constraint = False,
-                          list_of_dims = [],
-                          region_identity = None,
-                          infer_sign = None,
-                          initial_C = None,
-                          current_etas = None
                           ):
     """
     Fit a linear regression y_i ~ N(Wx_i + b, diag(S)) for W, b, S.
@@ -400,35 +312,23 @@ def fit_linear_regression(Xs, ys,
         check_shape(ExyT, "ExyT", (x_dim, d))
         check_shape(EyyT, "EyyT", (d, d))
 
-    # let's check if we have unknown cells, in which case we will force sigma to be diagonal
-    unknown_cells = np.where(infer_sign==0)[0]
-    # Solve for the MAP estimate
-    if block_diagonal>0:
-        # update C
-        ExxT = ExxT + prior_ExxT
-        W_full = solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, \
-                    current_etas, dynamics_dales_constraint, list_of_dims, infer_sign, latent_space_dim, region_identity)
-
-    # check if there are multiple region identities, but no Dale's constraint
-    elif len(np.unique(region_identity))>1:
-        W_full = solve_multi_region_lds_regression(ExxT, ExyT, region_identity, list_of_dims, prior_ExxT)
-    else:
-        W_full = np.linalg.solve(ExxT, ExyT).T
+    W_full = np.linalg.solve(ExxT, ExyT).T
         
     # Compute expected error for covariance matrix estimate
     # E[(y - Ax)(y - Ax)^T]
     expected_err = EyyT - W_full @ ExyT - ExyT.T @ W_full.T + W_full @ ExxT @ W_full.T
     nu = nu0 + weight_sum
+    
     # Get MAP estimate of posterior covariance
     Sigma = (expected_err + Psi0 * np.eye(d)) / (nu + d + 1)
-    # if len(unknown_cells)>0:
+    # we force R to be diagonal
     Sigma = np.diag(np.diag(Sigma))
+
     if fit_intercept:
         W, b = W_full[:, :-1], W_full[:, -1]
         return W, b, Sigma
     else:
         W = W_full
-
         b = 0
         return W, Sigma
 
@@ -828,66 +728,3 @@ def fit_negative_binomial_integer_r(xs, r_min=1, r_max=20):
     r_star = rs[np.argmax(mlls)]
 
     return r_star, p_star(r_star)
-
-
-if __name__ == "__main__":
-    # Try it out with logistic regression
-    npr.seed(3)
-    n = 100000
-    p = 20
-    X = npr.randn(n, p)
-    w = npr.randn(p)
-    b = -3
-    u = X.dot(w) + b
-
-    # print("gaussian")
-    # y = npr.randn(n) + u
-    # what, bhat = fit_scalar_glm(X, y, model="gaussian", mean_function="identity")
-    # print(w, b)
-    # print(what, bhat)
-    # print("")
-
-    # print("gaussian with uncertain inputs")
-    # y = npr.randn(n) + u
-    # what, bhat = fit_scalar_glm(X, y, model="gaussian", mean_function="identity",
-    #     X_variances=np.tile(0.1 * np.eye(p)[None, ...], (n, 1, 1)))
-    # print(w, b)
-    # print(what, bhat)
-    # print("")
-
-    # print("logistic regression")
-    # y = npr.rand(n) < 1 / (1 + np.exp(-u))
-    # what, bhat = fit_scalar_glm(X, y, model="bernoulli", mean_function="logistic")
-    # print(w, b)
-    # print(what, bhat)
-    # print("")
-
-    # print("poisson / exp")
-    # y = npr.poisson(np.exp(u))
-    # what, bhat = fit_scalar_glm(X, y, model="poisson", mean_function="exp", prior=(0, 10))
-    # print(w, b)
-    # print(what, bhat)
-    # print("")
-
-    # print("poisson / softplus")
-    # y = npr.poisson(np.log1p(np.exp(u)))
-    # what, bhat = fit_scalar_glm(X, y, model="poisson", mean_function="softplus")
-    # print("true: ", w, b)
-    # print("inf:  ", what, bhat)
-    # print("")
-
-    # r = 3
-    # print("negative_binomial / logistic; r=", r)
-    # y = npr.negative_binomial(r, 1 - 1 / (1 + np.exp(-u)))
-    # what, bhat = fit_scalar_glm(X, y, model="negative_binomial", mean_function="exp", model_hypers=dict(r=r))
-    # print("true: ", w, b)
-    # print("inf:  ", what, bhat)
-    # print("")
-
-    print("poisson / softplus with uncertain data")
-    y = npr.poisson(np.log1p(np.exp(u)))
-    what, bhat = fit_scalar_glm(X, y, model="poisson", mean_function="softplus",
-        X_variances=np.tile(0.5 * np.eye(p)[None, ...], (n, 1, 1)))
-    print("true: ", w, b)
-    print("inf:  ", what, bhat)
-    print("")

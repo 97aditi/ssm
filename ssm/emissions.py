@@ -1,5 +1,4 @@
 from warnings import warn
-
 import autograd.numpy as np
 import autograd.numpy.random as npr
 from autograd.scipy.special import gammaln
@@ -10,7 +9,7 @@ from ssm.util import ensure_args_are_lists, \
 from ssm.preprocessing import interpolate_data, pca_with_imputation
 from ssm.optimizers import adam, bfgs, rmsprop, sgd, lbfgs
 from ssm.stats import independent_studentst_logpdf, bernoulli_logpdf
-from ssm.regression import fit_linear_regression
+from ssm.regression import fit_linear_regression, fit_constrained_linear_regression
 from scipy.stats import invwishart
 import ssm.stats as stats
 
@@ -352,15 +351,13 @@ class _NeuralNetworkEmissions(Emissions):
 
 # Observation models for SLDS
 class _GaussianEmissionsMixin(object):
-    def __init__(self, N, K, D, M=0, single_subspace=True, infer_sign=None, region_identity=None, **kwargs):
+    def __init__(self, N, K, D, M=0, single_subspace=True, **kwargs):
         super(_GaussianEmissionsMixin, self).__init__(N, K, D, M=M, single_subspace=single_subspace, **kwargs)
         # self.inv_etas = -1 + npr.randn(1, N) if single_subspace else npr.randn(K, N)
         self.inv_etas = np.random.randn(1, N, N) if single_subspace else np.random.randn(K, N, N)
         # parameters of the inverse wishart prior on the emission noise
         self.Psi0 = np.ones(1) if single_subspace else np.ones(K)
         self.nu0 = np.ones(1) if single_subspace else np.ones(K)
-        self.infer_signs = infer_sign
-        self.region_identity = region_identity
 
     @property
     def params(self):
@@ -384,11 +381,6 @@ class _GaussianEmissionsMixin(object):
 
         mus = self.forward(x, input, tag).reshape((-1, data.shape[0], self.N))
         Sigmas = self.inv_etas
-
-        if data.shape[1]!=self.N and self.infer_signs is not None:
-            # remove dimensions of mu and Sigma corresponding to the unknown neurons
-            mus = mus[:, :, self.infer_signs!=0]
-            Sigmas = Sigmas[:, self.infer_signs!=0, :][:, :, self.infer_signs!=0]
 
         # # TODO: this is wrong, needs to be fixed
         # lls = -0.5 * np.linalg.slogdet(2 * np.pi * etas)[1] - 0.5 * (data[:, None, :] - mus) @ np.linalg.inv(etas) @ ((data[:, None, :] - mus).transpose((0, 2, 1)))
@@ -414,65 +406,17 @@ class _GaussianEmissionsMixin(object):
         mus = self.forward(variational_mean, input, tag)
         yhat = mus[:, 0, :] if self.single_subspace else np.sum(mus * expected_states[:,:,None], axis=1)
         return yhat
-
-
-class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
-
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
-        datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
-        pca = self._initialize_with_pca(datas, inputs=inputs, masks=masks, tags=tags)
-        # TODO: check if makes sense?
-        self.inv_etas[:,...] = pca.noise_variance_ + 1e-4*np.eye(self.N)
-
-    def neg_hessian_log_emissions_prob(self, data, input, mask, tag, x, Ez):
-        # TODO: check if things need to be changed here?
-        # Return (T, D, D) array of blocks for the diagonal of the Hessian
-        T, D = data.shape
-        if self.single_subspace:
-            # check if we have unknown neurons
-            if self.infer_signs is not None:
-                R_inv = np.linalg.inv(self.inv_etas[0][self.infer_signs!=0, :][:, self.infer_signs!=0])
-                block = -1.0 * (self.Cs[0][self.infer_signs!=0,:]).T@R_inv@(self.Cs[0][self.infer_signs!=0, :])
-            else:
-                R_inv = np.linalg.inv(self.inv_etas[0])
-                block = -1.0 * self.Cs[0].T@R_inv@self.Cs[0]
-            hess = np.tile(block[None,:,:], (T, 1, 1))
-        else:
-            blocks = np.array([-1.0 * C.T@inv_eta@C
-                               for C, inv_eta in zip(self.Cs, self.inv_etas)])
-            hess = np.sum(Ez[:,:,None,None] * blocks, axis=1)
-        return -1 * hess
     
-    def log_prior(self,):
-        log_prior = 0
-        K = 1 if self.single_subspace else self.K
-        for k in range(K):
-           # compute inverse wishart prior on the emission noise
-            log_prior += log_prior + invwishart.logpdf(self.inv_etas[k], self.nu0[k] + self.N +1, self.Psi0[k]*np.eye(self.N))
-        return log_prior
-
-    def m_step(self, discrete_expectations, continuous_expectations,
-               datas, inputs, masks, tags,
-               optimizer="bfgs", maxiter=100, **kwargs):
-        
-        ys = datas
-        Xs = [np.column_stack([x]) for (_, x, _, _), u in
-                zip(continuous_expectations, inputs)]
+    def _compute_statistics_for_m_step(self, ys, inputs, masks, tags, continuous_expectations, discrete_expectations):
+        """ compute all statistics needed for M step when a closed-form update is feasible"""
         K = self.K
-
-        # let's modify this so that F and d are always zero
-        M = self.M
-
         EyyT = np.zeros((K, self.N, self.N))
         ExxT = np.zeros((K, self.D+1, self.D+1))
         ExyT = np.zeros((K, self.D+1, self.N))
         weight_sum = 0
 
         weights = [np.ones(y.shape[0]) for y in ys]
-
-        for y, input, weight, (_, Ex, smoothed_sigmas, _), (Ez, _, _), in zip(ys, inputs, weights, \
-                                                continuous_expectations, discrete_expectations):
+        for y, input, weight, (_, Ex, smoothed_sigmas, _), (Ez, _, _), in zip(ys, inputs, weights, continuous_expectations, discrete_expectations):
             for k in range(self.K):
                 w = Ez[:,k]
                 EyyT[k] += np.einsum('t,ti,tj->ij',w, y, y)
@@ -486,56 +430,199 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
                 ExyT[k, :self.D,:] += np.einsum('t,ti,tj->ij', w, Ex, y)
                 ExyT[k, -1,:] += np.einsum('t,ti->i', w, y)
                 weight_sum += np.sum(weight)
+        return ExxT, ExyT, EyyT, weight_sum
 
+
+class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
+    @ensure_args_are_lists
+    def initialize(self, datas, inputs=None, masks=None, tags=None):
+        datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
+        pca = self._initialize_with_pca(datas, inputs=inputs, masks=masks, tags=tags)
+        self.inv_etas[:,...] = pca.noise_variance_ + 1e-4*np.eye(self.N)
+
+    def neg_hessian_log_emissions_prob(self, data, input, mask, tag, x, Ez):
+        # TODO: check if things need to be changed here?
+        # Return (T, D, D) array of blocks for the diagonal of the Hessian
+        T, D = data.shape
+        if self.single_subspace:
+            R_inv = np.linalg.inv(self.inv_etas[0])
+            block = -1.0 * self.Cs[0].T@R_inv@self.Cs[0]
+            hess = np.tile(block[None,:,:], (T, 1, 1))
+        else:
+            blocks = np.array([-1.0 * C.T@inv_eta@C
+                               for C, inv_eta in zip(self.Cs, self.inv_etas)])
+            hess = np.sum(Ez[:,:,None,None] * blocks, axis=1)
+        return -1 * hess
+    
+    def log_prior(self,):
+        """ computes the log prior of the emission parameters """
+        log_prior = 0
+        K = 1 if self.single_subspace else self.K
+        for k in range(K):
+            # compute inverse wishart prior on the emission noise
+            log_prior += log_prior + invwishart.logpdf(self.inv_etas[k], self.nu0[k] + self.N +1, self.Psi0[k]*np.eye(self.N))
+        return log_prior
+
+    def m_step(self, discrete_expectations, continuous_expectations,
+               datas, inputs, masks, tags,
+               optimizer="bfgs", maxiter=100, **kwargs):
+        Xs = [np.column_stack([x, u]) for x, u in
+              zip(continuous_expectations, inputs)]
+        ys = datas
+        ExxT, ExyT, EyyT, weight_sum = self._compute_statistics_for_m_step(self, ys, inputs, masks, tags, continuous_expectations, discrete_expectations)
         ws = [Ez for (Ez, _, _) in discrete_expectations]
 
-        block_diagonal = kwargs.get('emission_block_diagonal', False) # whether to learn block_diagonal emissions
-        dynamics_dales_constraint = kwargs.get('dynamics_dales_constraint', False) # whether to enforce the Dale's principle on the dynamics
-        region_identity = kwargs.get('region_identity', None) # which region each neuron belongs to
+        if self.single_subspace and all([np.all(mask) for mask in masks]):
+            # Return exact m-step updates for C, F, d, and inv_etas
+            # get expectations in right shape
+            expectations = [ExxT[0], ExyT[0], EyyT[0], weight_sum]
+            CF, d, Sigma = fit_linear_regression(
+                Xs, ys,
+                expectations=expectations,
+                prior_ExxT=1e-4 * np.eye(self.D + self.M + 1),
+                prior_ExyT=np.zeros((self.D + self.M + 1, self.N)))
+            self.Cs = CF[None, :, :self.D]
+            self.Fs = CF[None, :, self.D:]
+            self.ds = d[None, :]
+            self.inv_etas = np.log(np.diag(Sigma))[None, :]
+        else:
+            Cs, Fs, ds, inv_etas = [], [], [], []
+            for k in range(self.K):
+                expectations = [ExxT[k], ExyT[k], EyyT[k], weight_sum]
+                CF, d, Sigma = fit_linear_regression(
+                    Xs, ys, 
+                    expectations=expectations, weights=[w[:, k] for w in ws],
+                    prior_ExxT=1e-4 * np.eye(self.D + self.M + 1),
+                    prior_ExyT=np.zeros((self.D + self.M + 1, self.N)))
+                Cs.append(CF[:, :self.D])
+                Fs.append(CF[:, self.D:])
+                ds.append(d)
+                inv_etas.append(np.log(np.diag(Sigma)))
+            self.Cs = np.array(Cs)
+            self.Fs = np.array(Fs)
+            self.ds = np.array(ds)
+            self.inv_etas = np.array(inv_etas)
+
+
+class GaussianCellTypeEmissions(_GaussianEmissionsMixin, _LinearEmissions):
+    """ Gaussian emissions with a block diagonal structure for the emission matrix, each block corresponding to a different cell type, we also enforce non-negative weights for the emission matrix when there is more than one cell type """
+
+    def __init__(self, N, K, D, M=0, single_subspace=True, cell_identity=None, region_identity=None, list_of_dimensions=None, **kwargs):
+        super(GaussianCellTypeEmissions, self).__init__(N, K, D, M=M, single_subspace=single_subspace, **kwargs)
+
+        self.cell_identity = cell_identity  # defines the cell class identity of each neuron, 0 for unknown
+        # assert that the cell identity is not None and contains non-negative integers
+        assert self.cell_identity is not None, "Cell identity must be provided"
+        assert np.all(self.cell_identity >= 0), "Cell identity must be non-negative"
+        self.region_identity = region_identity  # defines the region identity of each neuron, used to enforce block diagonal structure
+        if self.region_identity is not None:
+            assert np.all(self.region_identity >= 0), "Region identity must be non-negative"
+        else:
+            self.region_identity = np.zeros(N, dtype=int)
+        self.list_of_dimensions = list_of_dimensions  # defines the dimensions of the latent space for each region
+
+    @ensure_args_are_lists
+    def initialize(self, datas, inputs=None, masks=None, tags=None):
+        """ initialize with PCA similar to standard GaussianEmissions """
+        datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
+        pca = self._initialize_with_pca(datas, inputs=inputs, masks=masks, tags=tags)
+        self.inv_etas[:,...] = pca.noise_variance_ + 1e-4*np.eye(self.N)
+
+    def neg_hessian_log_emissions_prob(self, data, input, mask, tag, x, Ez):
+        T, D = data.shape
+        if self.single_subspace:
+            # we may have neurons whose cell identity is unknown, in which case we remove them from this computation
+            if self.cell_identity is not None:
+                R_inv = np.linalg.inv(self.inv_etas[0][self.cell_identity!=0, :][:, self.cell_identity!=0])
+                block = -1.0 * (self.Cs[0][self.cell_identity!=0,:]).T@R_inv@(self.Cs[0][self.cell_identity!=0, :])
+            else:
+                R_inv = np.linalg.inv(self.inv_etas[0])
+                block = -1.0 * self.Cs[0].T@R_inv@self.Cs[0]
+            hess = np.tile(block[None,:,:], (T, 1, 1))
+        else:
+            blocks = np.array([-1.0 * C.T@inv_eta@C
+                               for C, inv_eta in zip(self.Cs, self.inv_etas)])
+            hess = np.sum(Ez[:,:,None,None] * blocks, axis=1)
+        return -1 * hess
+    
+    def log_prior(self,):
+        """ computes the log prior of the emission parameters """
+        log_prior = 0
+        K = 1 if self.single_subspace else self.K
+        for k in range(K):
+            # compute inverse wishart prior on the emission noise
+            log_prior += log_prior + invwishart.logpdf(self.inv_etas[k], self.nu0[k] + self.N +1, self.Psi0[k]*np.eye(self.N))
+        return log_prior
+    
+    def log_likelihoods(self, data, input, mask, tag, x):
+        """ compute LL from the emission model, outputs a (T, K) array of log-likelihoods """
+        if mask is not None and np.any(~mask) and not isinstance(mus, np.ndarray):
+            """ compute log-ll of data under the emission model """
+            raise Exception("Current implementation of multivariate_normal_logpdf for masked data"
+                            "does not work with autograd because it writes to an array. "
+                            "Use DiagonalGaussian instead if you need to support missing data.")
+
+        mus = self.forward(x, input, tag).reshape((-1, data.shape[0], self.N))
+        Sigmas = self.inv_etas
+
+        if self.cell_identity is not None and np.any(self.cell_identity==0): # remove unknown cell types when computing LL (this is during training when we remove unknown cells during the E step)
+            mus = mus[:, :, self.cell_identity!=0]
+            Sigmas = Sigmas[:, self.cell_identity!=0, :][:, :, self.cell_identity!=0]
+
+        lls = np.column_stack([stats.multivariate_normal_logpdf(data, mu, Sigma)
+                               for mu, Sigma in zip(mus, Sigmas)])
+        return lls  
+
+    def m_step(self, discrete_expectations, continuous_expectations,
+               datas, inputs, masks, tags,
+               **kwargs):
+        """ M=step for the GaussianCellTypeEmissions which are no longer in closed form"""
+
+        ys = datas
+        Xs = [np.column_stack([x]) for (_, x, _, _), u in
+                zip(continuous_expectations, inputs)]
+        region_identity, cell_identity = self.region_identity, self.cell_identity
         num_regions = np.unique(region_identity).shape[0] if region_identity is not None else 1
-        infer_sign = kwargs.get('infer_sign', None) # whether a neuron is excitatory or inhibitory (or unknown)
-        list_of_dims = kwargs.get('list_of_dims', [self.D,]) # list of dimensions for each region
+
+        ExxT, ExyT, EyyT, weight_sum = self._compute_statistics_for_m_step(ys, inputs, masks, tags, continuous_expectations, discrete_expectations)
+        ws = [Ez for (Ez, _, _) in discrete_expectations]
+        list_of_dims = kwargs.get('list_of_dimensions', [self.D//num_regions]*num_regions) # how to partition the latent space dimensionality to create the block diagonal structure, we assume equal dims per region 
         
         if self.single_subspace and all([np.all(mask) for mask in masks]):
             # Return exact m-step updates for C, F, d, and inv_etas
             initial_C = np.hstack(([self.Cs[0], self.ds[0][:, None]]))
             # get expectations in right shape
             expectations = [ExxT[0], ExyT[0], EyyT[0], weight_sum]
-            CF, d, Sigma = fit_linear_regression(
-                Xs, ys,
-                expectations=expectations, 
-                fit_intercept=True,
+            CF, d, Sigma = fit_constrained_linear_regression(
+                Xs, ys, 
+                expectations=expectations, fit_intercept=True,
                 Psi0=self.Psi0[0], nu0=self.nu0[0],
                 prior_ExxT=1e-4 * np.eye(self.D+1),
-                prior_ExyT=np.zeros((self.D+1, self.N)), block_diagonal=block_diagonal,
-                dynamics_dales_constraint = dynamics_dales_constraint,  
-                list_of_dims = list_of_dims,
-                region_identity = region_identity,
-                infer_sign = infer_sign,
-                initial_C=initial_C, current_etas=self.inv_etas[0]) 
+                prior_ExyT=np.zeros((self.D+1, self.N)), 
+                list_of_dims = list_of_dims, 
+                region_identity = region_identity, cell_identity = cell_identity,
+                initial_C=initial_C) 
             self.Cs = CF[None, :, :self.D]
             self.inv_etas =  Sigma[None, :]
             self.Fs = np.zeros((1, self.N, self.M))
             self.ds = d[None, :]
-        else:
+        else: 
+            # for a switching model, we need to fit a separate emission model for each discrete state
             Cs, Fs, ds, inv_etas = [], [], [], []
             for k in range(self.K):
                 initial_C = np.hstack(([self.Cs[k], self.Fs[k], self.ds[k][:, None]]))
-                # get expectations in right shape
                 expectations = [ExxT[k], ExyT[k], EyyT[k], weight_sum]
-                CF, d, Sigma = fit_linear_regression(
+                CF, d, Sigma = fit_constrained_linear_regression(
                     Xs, ys, 
                     expectations = expectations,
                     weights=[w[:, k] for w in ws],
                     Psi0=self.Psi0[k], nu0=self.nu0[k],
                     prior_ExxT=1e-4* np.eye(self.D + self.M + 1),
                     prior_ExyT=np.zeros((self.D + self.M + 1, self.N)),
-                    block_diagonal=block_diagonal,
-                    dynamics_dales_constraint = dynamics_dales_constraint, 
                     list_of_dims = list_of_dims,
                     region_identity = region_identity,
-                    infer_sign = infer_sign,
-                    initial_C=initial_C, current_etas=self.inv_etas[0])
+                    cell_identity = cell_identity,
+                    initial_C=initial_C)
                 Cs.append(CF[:, :self.D])
                 Fs.append(CF[:, self.D:])
                 ds.append(d)

@@ -73,6 +73,7 @@ class SLDS(object):
         dynamics_classes = dict(
             none=obs.GaussianObservations,
             gaussian=obs.AutoRegressiveObservations,
+            gaussian_ctds = obs.AutoRegressiveCellTypeObservations,
             diagonal_gaussian=obs.AutoRegressiveDiagonalNoiseObservations,
             t=obs.RobustAutoRegressiveObservations,
             studentst=obs.RobustAutoRegressiveObservations,
@@ -98,6 +99,7 @@ class SLDS(object):
             gaussian_orthog=emssn.GaussianOrthogonalEmissions,
             gaussian_id=emssn.GaussianIdentityEmissions,
             gaussian_nn=emssn.GaussianNeuralNetworkEmissions,
+            gaussian_ctds=emssn.GaussianCellTypeEmissions,
             studentst=emssn.StudentsTEmissions,
             studentst_orthog=emssn.StudentsTOrthogonalEmissions,
             studentst_id=emssn.StudentsTIdentityEmissions,
@@ -142,7 +144,6 @@ class SLDS(object):
         self.transitions = transitions
         self.dynamics = dynamics
         self.emissions = emissions
-        
 
     @property
     def params(self):
@@ -203,56 +204,6 @@ class SLDS(object):
         self.init_state_distn = copy.deepcopy(best_arhmm.init_state_distn)
         self.transitions = copy.deepcopy(best_arhmm.transitions)
         self.dynamics = copy.deepcopy(best_arhmm.observations)
-
-        
-    def initialize_with_nnmf(self, init_nnmf, datas, inputs=None, masks=None, tags=None,):
-
-        # currently only valid for gaussian emissions
-        assert isinstance(self.emissions, emssn.GaussianEmissions), "Currently only valid for Gaussian emissions"
-        
-        # First initialize the observation model, with the first element in the NNMF list
-        emission_init = init_nnmf[1].T
-        # Assign each state a random projection of the emission_init
-        Keff = 1 if self.emissions.single_subspace else self.K
-        Cs, ds = [], []
-        for k in range(Keff):
-            weights = npr.randn(self.D, self.D * Keff)
-            weights = np.linalg.svd(weights, full_matrices=False)[2]
-            if Keff == 1:
-                Cs.append(init_nnmf[1])
-            else:
-                Cs.append((weights @ emission_init).T)
-            ds.append(np.mean(np.concatenate(datas), axis=0))
-
-        self.emissions.Cs = np.array(Cs)
-        self.emissions.ds = np.array(ds)
-
-       # Get the initialized variational mean for the data
-        xs = [self.emissions.invert(data, input, mask, tag)
-              for data, input, mask, tag in zip(datas, inputs, masks, tags)]
-        xmasks = [np.ones_like(x, dtype=bool) for x in xs]
-        
-        # no compute the noise in y = Cx + d+ noise
-        noise = np.concatenate([data - x@C.T - d for data, x, C, d in zip(datas, xs, Cs, ds)])
-        # find the variance of each dimension
-        var = np.var(noise, axis=0)
-        # set the variance of the emission model
-        self.emissions.inv_etas[:,...] = np.diag(var) + 1e-5*np.eye(self.N)
-
-        # now initialize the dynamics model
-        # only valid for k=1
-        assert self.K==1, "Currently only valid for K=1"
-
-        self.dynamics.As = np.array([init_nnmf[0]])
-        # compute the bias as the mean of the xs
-        self.dynamics.bs = np.array([np.mean(np.concatenate(xs), axis=0)])
-        # now let's compute noise
-        noise = np.concatenate([x[1:] - x[:-1]@A.T - b for x, A, b in zip(xs, self.dynamics.As, self.dynamics.bs)])
-        # find the variance of each dimension
-        var = np.var(noise, axis=0)
-        # set the variance of the dynamics model
-        # self.dynamics._sqrt_Sigmas = np.array([np.diag(np.sqrt(var))])
-        self.dynamics._sqrt_Sigmas = np.array([np.eye(self.D) + 1e-5*np.eye(self.D)])
 
     def permute(self, perm):
         """
@@ -315,7 +266,6 @@ class SLDS(object):
             x[t] = self.dynamics.sample_x(z[t], x[:t], input=input[t], tag=tag, with_noise=with_noise)
 
         # Sample observations given latent states
-        # TODO: sample in the loop above?
         y = self.emissions.sample(z, x, input=input, tag=tag)
         return z[pad:], x[pad:], y[pad:]
 
@@ -365,10 +315,8 @@ class SLDS(object):
 
             # log p(x, y | theta) = log \sum_z p(x, y, z | theta)
             for x, data, input, mask, tag in zip(xs, datas, inputs, masks, tags):
-
                 # The "mask" for x is all ones
                 x_mask = np.ones_like(x, dtype=bool)
-
                 pi0 = self.init_state_distn.initial_state_distn
                 Ps = self.transitions.transition_matrices(x, input, x_mask, tag)
                 log_likes = self.dynamics.log_likelihoods(x, input, x_mask, tag)
@@ -577,8 +525,11 @@ class SLDS(object):
         for (Ez, Ezzp1, _), x0, data, input, mask, tag in \
             zip(variational_posterior.discrete_expectations,
                 x0s, datas, inputs, masks, tags):
-            unknown_cells = np.argwhere(self.infer_sign==0)[:,0]
-            data = np.delete(data, unknown_cells, axis=1)
+            
+            if isinstance(self.emissions, emssn.GaussianCellTypeEmissions):
+                # Remove cells with unknown identity during E step, we will infer them simulataneously in the M step
+                unknown_cells = np.argwhere(self.emissions.cell_identity==0)[:,0]
+                data = np.delete(data, unknown_cells, axis=1)
 
             # Use Newton's method or LBFGS to find the argmax of the expected log joint
             scale = x0.size
@@ -630,10 +581,7 @@ class SLDS(object):
                                       tags,
                                       emission_optimizer,
                                       emission_optimizer_maxiter,
-                                      alpha,
-                                      dynamics_dales_constraint=False,
-                                      list_of_dims=[],
-                                      emission_block_diagonal=False,):
+                                      alpha,):
 
         # Compute necessary expectations either analytically or via samples
         continuous_samples = variational_posterior.sample_continuous_states()
@@ -653,16 +601,13 @@ class SLDS(object):
                       datas=continuous_samples,
                       inputs=inputs,
                       masks=xmasks,
-                      tags=tags,
-                      dynamics_dales_constraint=dynamics_dales_constraint,
-                      list_of_dims=list_of_dims,
-                      region_identity=self.region_identity)
+                      tags=tags,)
         exact_m_step_dynamics = [
            obs.AutoRegressiveObservations,
            obs.AutoRegressiveObservationsNoInput,
            obs.AutoRegressiveDiagonalNoiseObservations,
+           obs.AutoRegressiveCellTypeObservations,
         ]
-
             
         if type(self.dynamics) in exact_m_step_dynamics and self.dynamics.lags == 1:
             # In this case, we can do an exact M-step on the dynamics by passing
@@ -676,34 +621,29 @@ class SLDS(object):
             self.dynamics.m_step(**kwargs)
             self.dynamics.params = convex_combination(curr_prms, self.dynamics.params, alpha)
 
-        # Update emissions params. This is always approximate (at least for now).
-        if emission_block_diagonal>0:
-            # only allowed for gaussian emissions 
-            assert isinstance(self.emissions, emssn.GaussianEmissions), "emission_block_diagonal only allowed for GaussianEmissions"
-
+        # Update emissions params. If the emission is Gaussian, we can do an exact update
         if isinstance(self.emissions, emssn.GaussianEmissions):
             continuous_expectations = variational_posterior.continuous_expectations
-            # TODO: do we need this?
-            curr_prms = copy.deepcopy(self.emissions.params)
             self.emissions.m_step(discrete_expectations, 
                                 continuous_expectations,
                                 datas, inputs, masks, tags,
                                 optimizer=emission_optimizer,
-                                maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
-                                dynamics_dales_constraint = dynamics_dales_constraint,
-                                list_of_dims=list_of_dims,
-                                region_identity = self.region_identity,
-                                infer_sign=self.infer_sign)
+                                maxiter=emission_optimizer_maxiter)
+        elif isinstance(self.emissions, emssn.GaussianCellTypeEmissions):
+            # we need to pass the list of dimensions for the cell types, as well as region and cell identity information
+            continuous_expectations = variational_posterior.continuous_expectations
+            self.emissions.m_step(discrete_expectations, 
+                                continuous_expectations,
+                                datas, inputs, masks, tags,
+                                optimizer=emission_optimizer,
+                                maxiter=emission_optimizer_maxiter, 
+                                list_of_dimensions=self.list_of_dimensions)
         else:
             curr_prms = copy.deepcopy(self.emissions.params)
             self.emissions.m_step(discrete_expectations, continuous_samples,
                                 datas, inputs, masks, tags,
                                 optimizer=emission_optimizer,
-                                maxiter=emission_optimizer_maxiter, emission_block_diagonal=emission_block_diagonal,
-                                dynamics_dales_constraint = dynamics_dales_constraint,
-                                list_of_dims=list_of_dims,
-                                region_identity = self.region_identity,
-                                infer_sign=self.infer_sign)
+                                maxiter=emission_optimizer_maxiter)
             self.emissions.params = convex_combination(curr_prms, self.emissions.params, alpha)
 
     def _laplace_em_elbo(self,
@@ -717,7 +657,6 @@ class SLDS(object):
         def estimate_expected_log_joint(n_samples):
             exp_log_joint = 0.0
             for sample in range(n_samples):
-
                 # sample continuous states
                 continuous_samples = variational_posterior.sample_continuous_states()
                 discrete_expectations = variational_posterior.discrete_expectations
@@ -741,7 +680,6 @@ class SLDS(object):
                     exp_log_joint += np.sum(Ez * log_likes)
             return exp_log_joint / n_samples
 
-        # if isinstance(self.dynamics, obs.AutoRegressiveObservations) and isinstance(self.emissions, emssn.GaussianEmissions) and self.K==1:
         return estimate_expected_log_joint(n_samples) + variational_posterior.entropy()
 
     def _fit_laplace_em(self, variational_posterior, datas,
@@ -756,19 +694,16 @@ class SLDS(object):
                         emission_optimizer_maxiter=100,
                         alpha=0.5,
                         learning=True,
-                        dynamics_dales_constraint=False,
-                        list_of_dims=[],
-                        emission_block_diagonal=False,
                         ):
         """
         Fit an approximate posterior p(z, x | y) \approx q(z) q(x).
         Perform block coordinate ascent on q(z) followed by q(x).
         Assume q(x) is a Gaussian with a block tridiagonal precision matrix,
-        and that we update q(x) via Laplace approximation.
+        and that we update q(x) via Laplace aspproximation.
         Assume q(z) is a chain-structured discrete graphical model.
         """
         
-        if self.K==1:
+        if self.K==1: # if K=1, we can evaluate log-ll exactly and check for convergence
             elbos = [self.log_probability(datas, inputs, masks, tags)]
         else:
             elbos = [self._laplace_em_elbo(variational_posterior, datas, inputs, masks, tags, n_samples=num_samples)]
@@ -792,13 +727,14 @@ class SLDS(object):
             if learning:
                 self._fit_laplace_em_params_update(
                     variational_posterior, datas, inputs, masks, tags,  emission_optimizer,\
-                          emission_optimizer_maxiter, alpha, dynamics_dales_constraint, list_of_dims, emission_block_diagonal)
+                          emission_optimizer_maxiter, alpha)
             
             if self.K==1:
                 elbos.append(self.log_probability(datas, inputs, masks, tags))
-                # check if LP has decreased
-                if elbos[-1] < elbos[-2]:
-                    print("WARNING: LP has decreased by {} at iteration {}".format(elbos[-2]-elbos[-1], itr))
+                if isinstance(self.emissions, emssn.GaussianEmissions):
+                    # this is exact log-likelihood, so it should not decrease
+                    if elbos[-1] < elbos[-2]:
+                        print("WARNING: LP has decreased by {} at iteration {}".format(elbos[-2]-elbos[-1], itr))
                 # check for convergence
                 if np.abs(elbos[-1] - elbos[-2]) < 1e-4 and itr>5:
                     print("Converged at iteration {}".format(itr))
@@ -810,10 +746,9 @@ class SLDS(object):
             if verbose == 2:
               pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
             # check for convergence
-            if np.abs(elbos[-1] - elbos[-2]) < 1e-7 and itr>5:
+            if np.abs(elbos[-1] - elbos[-2]) < 1e-4 and itr>5:
                 print("Converged at iteration {}".format(itr))
                 break
-
         return np.array(elbos)
 
     def _make_variational_posterior(self, variational_posterior, datas, inputs, masks, tags, method, **variational_posterior_kwargs):
@@ -828,9 +763,9 @@ class SLDS(object):
                 structured_meanfield=varinf.SLDSStructuredMeanFieldVariationalPosterior
                 )
             
-            if self.infer_sign is not None:
-                # delete data from the unknown cells
-                datas = [np.delete(data, np.argwhere(self.infer_sign==0)[:,0], axis=1) for data in datas]
+            if isinstance(self.emissions, emssn.GaussianCellTypeEmissions):
+                # delete data from the unknown cells during the E step
+                datas = [np.delete(data, np.argwhere(self.emissions.cell_identity==0)[:,0], axis=1) for data in datas]
 
             if variational_posterior not in _var_posteriors:
                 raise Exception("Invalid posterior: {}. Options are {}.".\
@@ -860,14 +795,12 @@ class SLDS(object):
             method="laplace_em", variational_posterior="structured_meanfield",
             variational_posterior_kwargs=None,
             initialize=True,
-            init_nnmf=None,
             discrete_state_init_method="random",
             num_init_iters=25,
             num_init_restarts=1,
-            dynamics_kwargs=None,
-            emission_kwargs=None,
+            dynamics_kwargs={},
+            emission_kwargs={},
             **kwargs):
-
         """
         There are many possible algorithms one could run.  We have only implemented
         two here:
@@ -892,53 +825,17 @@ class SLDS(object):
                             format(method, _fitting_methods.keys()))
 
         # Initialize the model parameters
-        if initialize and init_nnmf is None:
+        if initialize:
             self.initialize(datas, inputs, masks, tags,
                             verbose=verbose,
                             discrete_state_init_method=discrete_state_init_method,
                             num_init_iters=num_init_iters,
                             num_init_restarts=num_init_restarts,)
         
-        if init_nnmf is not None:
-            # currently it only works for K=1
-            assert self.K == 1, "init_nnmf only works for K=1"
-            print("initializing model parameters")
-            if len(init_nnmf) == 2:
-                self.initialize_with_nnmf(init_nnmf, datas, inputs, masks, tags,)
-            else:
-                # change this to pass other params also
-                A, b, C, d, Q, R, mu_init, Sigma_init = init_nnmf
-                # dynamics parameters
-                self.dynamics.A = A.copy()
-                self.dynamics.b = b.copy()
-                self.dynamics.Sigmas = Q[np.newaxis, :, :].copy()
-                self.dynamics.mu_init = mu_init[np.newaxis, :].copy()
-                self.dynamics.Sigmas_init = Sigma_init[np.newaxis, :].copy()
-                # emission parameters
-                self.emissions.Cs = C[np.newaxis, :, :].copy()
-                self.emissions.ds = d[np.newaxis, :].copy()
-                self.emissions.inv_etas = R[np.newaxis, :].copy()
-
         # Initialize the variational posterior
         variational_posterior_kwargs = variational_posterior_kwargs or {}
         posterior = self._make_variational_posterior(
             variational_posterior, datas, inputs, masks, tags, method, **variational_posterior_kwargs)
-
-        # added dynamics_kwargs to contain information about any constraints on the dynamics matrix, \
-        # such as if columns should obey dale's law (dynamics_dales_constraint contains fraction of positive columns) 
-        # and if the diagonal should be zero (dynamics_diagonal_zero)
-        # added emission_kwargs to impose block-sparse structure / positivity on the emission matrix 
-        # (emission_block_diagonal contains fraction of nonzero blocks column wise)
-
-        dynamics_kwargs = dynamics_kwargs or {}
-        emission_kwargs = emission_kwargs or {}
-
-        if init_nnmf is not None:
-            print("initializing posterior")
-            # run an E step to initialize the posterior
-            _ = _fitting_methods[method](
-            posterior, datas, inputs, masks, tags, verbose,
-            learning=False, **dynamics_kwargs, **emission_kwargs, num_iters=1, num_samples=1)
 
         elbos = _fitting_methods[method](
             posterior, datas, inputs, masks, tags, verbose,
@@ -998,6 +895,8 @@ class LDS(SLDS):
             studentst=obs.RobustAutoRegressiveObservations,
             diagonal_t=obs.RobustAutoRegressiveDiagonalNoiseObservations,
             diagonal_studentst=obs.RobustAutoRegressiveDiagonalNoiseObservations,
+            gaussian_ctds = obs.AutoRegressiveCellTypeObservations,
+
             )
 
         if isinstance(dynamics, str):
@@ -1018,6 +917,7 @@ class LDS(SLDS):
             gaussian_orthog=emssn.GaussianOrthogonalEmissions,
             gaussian_id=emssn.GaussianIdentityEmissions,
             gaussian_nn=emssn.GaussianNeuralNetworkEmissions,
+            gaussian_ctds=emssn.GaussianCellTypeEmissions,
             studentst=emssn.StudentsTEmissions,
             studentst_orthog=emssn.StudentsTOrthogonalEmissions,
             studentst_id=emssn.StudentsTIdentityEmissions,
@@ -1059,24 +959,15 @@ class LDS(SLDS):
 
         init_state_distn = isd.InitialStateDistribution(1, D, M)
         transitions = trans.StationaryTransitions(1, D, M)
-        # check if emission_kwargs has infer_sign (E vs I neuron), and region identity
-        if emission_kwargs is not None:
-            default_infer_sign = np.ones(N)
-            default_infer_sign[N//2:] = -1  
-            self.infer_sign = emission_kwargs['infer_sign'] if 'infer_sign' in emission_kwargs else default_infer_sign
-            if emission_kwargs['infer_sign'] is None:
-                warnings.warn("infer_sign not provided, assuming first 50% of neurons are excitatory and rest are inhibitory")
-            self.region_identity = emission_kwargs['region_identity'] if 'region_identity' in emission_kwargs else np.zeros(N)
-            if emission_kwargs['region_identity'] is None:
-                warnings.warn("region_identity not provided, assuming all neurons are from the same region")
-
-        
-
         super().__init__(N, 1, D, M=M,
                          init_state_distn=init_state_distn,
                          transitions=transitions,
                          dynamics=dynamics,
                          emissions=emissions)
+        # if either emissions or dynamics are celltype dependent, then we need to assign dimensionality to each cell-type and potentially each region
+        if isinstance(self.emissions, emssn.GaussianCellTypeEmissions) or isinstance(self.dynamics, obs.AutoRegressiveCellTypeObservations):
+            self.list_of_dimensions = emission_kwargs['list_of_dimensions'] # this is a numpy array with num_regions x num_cell_types
+            assert isinstance(self.list_of_dimensions, np.ndarray), "expected list_of_dimensions to be a numpy array of shape num_regions x num_cell_types"
 
     @ensure_slds_args_not_none
     def expected_states(self, variational_mean, data, input=None, mask=None, tag=None):
@@ -1100,11 +991,11 @@ class LDS(SLDS):
 
     @ensure_args_are_lists
     def log_likelihood(self, datas, inputs=None, masks=None, tags=None):
+        """ compute exact log likelihood of the data """
+
         # get the current model parameters
         As, _, Vs, _ = self.dynamics.params
         Cs, Fs, ds, inv_etas = self.emissions.params
-
-        # obtain covariances and their inverses
         Q = self.dynamics.Sigmas[0]
         R = inv_etas[0]
 
@@ -1112,12 +1003,12 @@ class LDS(SLDS):
         S0 = self.dynamics.Sigmas_init[0]
 
         ll = 0
+        total_time_steps = sum([data.shape[0] for data in datas])
         # TODO: not accounting for dynamic bias bs
         for data, input in zip(datas, inputs):
             ll_this, _, _ = kalman_filter(mu0, S0, As[0], Vs[0], Q, Cs[0], Fs[0], R, input, data-ds[0])
             ll += ll_this
-        
-        return ll 
+        return ll/total_time_steps
 
     def sample(self, T, input=None, tag=None, prefix=None, with_noise=True):
         (_, x, y) = super().sample(T, input=input, tag=tag, prefix=prefix, with_noise=with_noise)
