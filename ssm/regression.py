@@ -76,7 +76,6 @@ def solve_unknown_neuron_C(ExxT_region, ExyT_i, list_dims_region, fit_intercept)
     # Select the solution with minimum error
     return Ws[np.argmin(prob_vals)]
 
-
 def solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C,list_of_dims, region_identities, cell_identity):
     """ learn each row of the C matrix separately assuming R is diagonal, this speeds up inference as optimization now happen over a much smaller d-dimensional space, aditionally, we can infer identities of unknown cells using this approach """
 
@@ -214,8 +213,6 @@ def fit_constrained_linear_regression(Xs, ys, expectations, list_of_dims, region
         check_shape(ExxT, "ExxT", (x_dim, x_dim))
         check_shape(ExyT, "ExyT", (x_dim, d))
         check_shape(EyyT, "EyyT", (d, d))
-        if prior_ExxT is not None:
-            ExxT = ExxT + prior_ExxT # add the prior, helpful for CTDS
 
     W_full = solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, list_of_dims, region_identity, cell_identity)
 

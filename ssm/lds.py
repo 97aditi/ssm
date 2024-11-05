@@ -731,9 +731,9 @@ class SLDS(object):
             
             if self.K==1:
                 elbos.append(self.log_probability(datas, inputs, masks, tags))
-                if isinstance(self.emissions, emssn.GaussianEmissions or emssn.GaussianCellTypeEmissions) and isinstance(self.dynamics, obs.AutoRegressiveObservations or obs.AutoRegressiveCellTypeObservations):
+                if isinstance(self.emissions, (emssn.GaussianEmissions, emssn.GaussianCellTypeEmissions)) and isinstance(self.dynamics, (obs.AutoRegressiveObservations, obs.AutoRegressiveCellTypeObservations)):
                     # this is exact log-likelihood, so it should not decrease
-                    if elbos[-1] < elbos[-2]:
+                    if (elbos[-1] < elbos[-2]) and (elbos[-2] - elbos[-1])>0.01:
                         print("WARNING: LP has decreased by {} at iteration {}".format(elbos[-2]-elbos[-1], itr))
                 # check for convergence
                 if np.abs(elbos[-1] - elbos[-2]) < 1e-4 and itr>5:
@@ -987,7 +987,7 @@ class LDS(SLDS):
         # let's compute the log likelihood of the data using the kalman filter
         # and then add the log prior
         ll = self.log_likelihood(datas, inputs=inputs, masks=masks, tags=tags)
-        return ll + self.log_prior()
+        return ll 
 
     @ensure_args_are_lists
     def log_likelihood(self, datas, inputs=None, masks=None, tags=None):

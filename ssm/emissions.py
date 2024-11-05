@@ -469,7 +469,7 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         Xs = [np.column_stack([x, u]) for x, u in
               zip(continuous_expectations, inputs)]
         ys = datas
-        ExxT, ExyT, EyyT, weight_sum = self._compute_statistics_for_m_step(self, ys, inputs, masks, tags, continuous_expectations, discrete_expectations)
+        ExxT, ExyT, EyyT, weight_sum = self._compute_statistics_for_m_step(ys, inputs, masks, tags, continuous_expectations, discrete_expectations)
         ws = [Ez for (Ez, _, _) in discrete_expectations]
 
         if self.single_subspace and all([np.all(mask) for mask in masks]):
@@ -554,10 +554,11 @@ class GaussianCellTypeEmissions(_GaussianEmissionsMixin, _LinearEmissions):
     def log_prior(self,):
         """ computes the log prior of the emission parameters """
         log_prior = 0
-        K = 1 if self.single_subspace else self.K
-        for k in range(K):
-            # compute inverse wishart prior on the emission noise
-            log_prior += log_prior + invwishart.logpdf(self.inv_etas[k], self.nu0[k] + self.N +1, self.Psi0[k]*np.eye(self.N))
+        # we diagonalize noise, hence we can get rid of the prior
+        # K = 1 if self.single_subspace else self.K
+        # for k in range(K):
+        #     # compute inverse wishart prior on the emission noise 
+        #     log_prior += log_prior + invwishart.logpdf(self.inv_etas[k], self.nu0[k] + self.N +1, self.Psi0[k]*np.eye(self.N))
         return log_prior
     
     def log_likelihoods(self, data, input, mask, tag, x):
@@ -588,11 +589,10 @@ class GaussianCellTypeEmissions(_GaussianEmissionsMixin, _LinearEmissions):
         Xs = [np.column_stack([x]) for (_, x, _, _), u in
                 zip(continuous_expectations, inputs)]
         region_identity, cell_identity = self.region_identity, self.cell_identity
-        num_regions = np.unique(region_identity).shape[0] if region_identity is not None else 1
 
         ExxT, ExyT, EyyT, weight_sum = self._compute_statistics_for_m_step(ys, inputs, masks, tags, continuous_expectations, discrete_expectations)
         ws = [Ez for (Ez, _, _) in discrete_expectations]
-        list_of_dims = kwargs.get('list_of_dimensions', [self.D//num_regions]*num_regions) # how to partition the latent space dimensionality to create the block diagonal structure, we assume equal dims per region 
+        list_of_dims = kwargs.get('list_of_dimensions') # how to partition the latent space dimensionality to create the block diagonal structure
         
         if self.single_subspace and all([np.all(mask) for mask in masks]):
             # Return exact m-step updates for C, F, d, and inv_etas
@@ -601,7 +601,7 @@ class GaussianCellTypeEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             expectations = [ExxT[0], ExyT[0], EyyT[0], weight_sum]
             CF, d, Sigma = fit_constrained_linear_regression(
                 Xs, ys, 
-                expectations=expectations, fit_intercept=True,
+                expectations=expectations, 
                 Psi0=self.Psi0[0], nu0=self.nu0[0],
                 prior_ExxT=1e-4 * np.eye(self.D+1),
                 prior_ExyT=np.zeros((self.D+1, self.N)), 
