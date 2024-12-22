@@ -1633,9 +1633,11 @@ class IndependentAutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 sigma = np.average(sqerr, weights=weights[:, k], axis=0) + 1e-16
                 self._log_sigmasq[k, d] = np.log(sigma)
 
-    def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
+    def sample_x(self, z, xhist, input=None, tag=None, with_noise=True, seed=None):
         D, As, bs, sigmas = self.D, self.As, self.bs, self.sigmasq
-
+        # seed noise only if seed is not None
+        if seed is not None:
+            npr.seed(seed)
         # Sample the initial condition
         if xhist.shape[0] < self.lags:
             sigma_init = self.sigmasq_init[z] if with_noise else 0
