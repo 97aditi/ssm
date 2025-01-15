@@ -1203,9 +1203,11 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         self._sqrt_Sigmas[0] = np.linalg.cholesky(Sigmas[0])
         self.Sigmas = Sigmas
 
-    def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
+    def sample_x(self, z, xhist, input=None, tag=None, with_noise=True, seed=None):
         D, As, bs, Vs = self.D, self.As, self.bs, self.Vs
-
+        # seed noise only if seed is not None
+        if seed is not None:
+            npr.seed(seed)
         if xhist.shape[0] < self.lags:
             # Sample from the initial distribution
             S = np.linalg.cholesky(self.Sigmas_init[z]) if with_noise else 0
