@@ -204,6 +204,9 @@ class SLDS(object):
         self.init_state_distn = copy.deepcopy(best_arhmm.init_state_distn)
         self.transitions = copy.deepcopy(best_arhmm.transitions)
         self.dynamics = copy.deepcopy(best_arhmm.observations)
+        # adding  a forced initialization of the input
+        self.dynamics.Vs[0] = np.ones((self.D, self.M))
+        self.dynamics.Vs[0][:,1] = -1
 
     def permute(self, perm):
         """
@@ -836,7 +839,6 @@ class SLDS(object):
         variational_posterior_kwargs = variational_posterior_kwargs or {}
         posterior = self._make_variational_posterior(
             variational_posterior, datas, inputs, masks, tags, method, **variational_posterior_kwargs)
-
         elbos = _fitting_methods[method](
             posterior, datas, inputs, masks, tags, verbose,
             learning=True, **dynamics_kwargs, **emission_kwargs, **kwargs)
@@ -884,7 +886,6 @@ class LDS(SLDS):
             emissions="gaussian_orthog",
             emission_kwargs=None,
             **kwargs):
-
 
         # Make the dynamics distn
         dynamics_classes = dict(
