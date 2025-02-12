@@ -1124,9 +1124,9 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 Ens[k] += np.sum(w)
 
                 # update the initial condition
-                self.mu_init[k] = (self.Vs[k]@u0).ravel()
                 x0 = Ex[0].reshape((D, 1))
-                self.Sigmas_init[k] = ExxT[0] + self.Vs[k]@u0@u0.T@self.Vs[k].T - self.Vs[k]@u0@x0.T - x0@u0.T@self.Vs[k].T
+                self.mu_init[k] = x0.ravel() # learning initial mean and cov
+                self.Sigmas_init[k] = ExxT[0] 
 
         # Symmetrize the expectations
         for k in range(K):
