@@ -1126,7 +1126,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 # update the initial condition
                 x0 = Ex[0].reshape((D, 1))
                 self.mu_init[k] = x0.ravel() # learning initial mean and cov
-                self.Sigmas_init[k] = ExxT[0] 
+                self._sqrt_Sigmas_init[k] = ExxT[0]
 
         # Symmetrize the expectations
         for k in range(K):
