@@ -1126,6 +1126,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 # update the initial condition
                 x0 = Ex[0].reshape((D, 1))
                 self.mu_init[k] = x0.ravel() # learning initial mean and cov
+                cov_init = smoothed_sigmas[0]- x0 @ x0.T 
                 self._sqrt_Sigmas_init[k] = np.linalg.cholesky(smoothed_sigmas[0]+1e-5*np.eye(D))
 
         # Symmetrize the expectations
