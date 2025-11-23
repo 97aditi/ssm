@@ -1301,8 +1301,8 @@ class AutoRegressiveCellTypeObservations(AutoRegressiveObservations):
                             within_region_constraints.append(W[j + dims_prev_regions, i + dims_prev_regions] >= 0)
                         elif i >= D_e:
                             within_region_constraints.append(W[j + dims_prev_regions, i + dims_prev_regions] <= 0)
-                    elif i==j: # for diagonal elements force each value to be less than 1 for stability
-                        within_region_constraints.append(W[i + dims_prev_regions, i + dims_prev_regions] < 1)
+                    # elif i==j: # for diagonal elements force each value to be less than 1 for stability
+                    #     within_region_constraints.append(W[i + dims_prev_regions, i + dims_prev_regions] < 1)
         return within_region_constraints
     
 
