@@ -1133,10 +1133,11 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 EyyTs[k] += np.einsum('t,tij->ij', w, ExxT[1:])
                 Ens[k] += np.sum(w)
 
-                w0 = gamma0[k]
-                init_counts[k] += w0
-                init_first_moments[k] += w0 * x0
-                init_second_moments[k] += w0 * ExxT_0
+                # update the initial condition
+                x0 = Ex[0].reshape((D, 1))
+                self.mu_init[k] = x0.ravel() # learning initial mean and cov
+                cov_init = smoothed_sigmas[0]- x0 @ x0.T 
+                self._sqrt_Sigmas_init[k] = np.linalg.cholesky(smoothed_sigmas[0]+1e-5*np.eye(D))
 
         # Symmetrize the expectations
         for k in range(K):
@@ -1301,6 +1302,8 @@ class AutoRegressiveCellTypeObservations(AutoRegressiveObservations):
                             within_region_constraints.append(W[j + dims_prev_regions, i + dims_prev_regions] >= 0)
                         elif i >= D_e:
                             within_region_constraints.append(W[j + dims_prev_regions, i + dims_prev_regions] <= 0)
+                    elif i==j: # for diagonal elements force each value to be less than 1 for stability
+                        within_region_constraints.append(W[i + dims_prev_regions, i + dims_prev_regions] < 1)
         return within_region_constraints
     
 
