@@ -1133,11 +1133,11 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 EyyTs[k] += np.einsum('t,tij->ij', w, ExxT[1:])
                 Ens[k] += np.sum(w)
 
-                # update the initial condition
-                x0 = Ex[0].reshape((D, 1))
-                self.mu_init[k] = x0.ravel() # learning initial mean and cov
-                cov_init = smoothed_sigmas[0]- x0 @ x0.T 
-                self._sqrt_Sigmas_init[k] = np.linalg.cholesky(smoothed_sigmas[0]+1e-5*np.eye(D))
+                w0 = gamma0[k]
+                if w0 > 1e-8:
+                    init_counts[k] += w0
+                    init_first_moments[k] += w0 * x0
+                    init_second_moments[k] += w0 * ExxT_0
 
         # Symmetrize the expectations
         for k in range(K):
@@ -1204,7 +1204,6 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 # update the model's parameters
                 self.mu_init[k] = mu0_k
                 self._sqrt_Sigmas_init[k] = np.linalg.cholesky(Sigma0_k)
-
 
         # If any states are unused, set their parameters to a perturbation of a used state
         unused = np.where(Ens < 1)[0]
