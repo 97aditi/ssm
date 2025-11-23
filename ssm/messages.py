@@ -735,6 +735,10 @@ def _kalman_filter_diagonal(mu0, S0, As, Bs, Qs, Cs, Ds, R_diags, us, ys):
     K = np.zeros((D, N))
     ll = 0
 
+    # check if S0 IS pd
+    if np.any(np.linalg.eigvals(S0) <= 0):
+        raise ValueError("Initial covariance is not positive definite")
+
     # Run the Kalman filter
     for t in range(T):
         At = As[t * hetero]
@@ -743,6 +747,10 @@ def _kalman_filter_diagonal(mu0, S0, As, Bs, Qs, Cs, Ds, R_diags, us, ys):
         Ct = Cs[t * hetero]
         Dt = Ds[t * hetero]
         Rt = R_diags[t * hetero]
+
+        # check if predicted_Sigmas[t] IS pd
+        if np.any(np.linalg.eigvals(predicted_Sigmas[t]) <= 0):
+            raise ValueError("Predicted covariance at time %d is not positive definite" % t)
 
         # Update the log likelihood
         ll += gaussian_logpdf_lrpd(ys[t],
