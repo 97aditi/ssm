@@ -214,14 +214,39 @@ def fit_constrained_linear_regression(Xs, ys, expectations, list_of_dims, region
         check_shape(ExyT, "ExyT", (x_dim, d))
         check_shape(EyyT, "EyyT", (d, d))
 
-    W_full = solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, list_of_dims, region_identity, cell_identity)
+    num_cell_types = np.unique(cell_identity).shape[0]
+    if num_cell_types==1: # this is for multi-region with no cell type specificity
+        # separate the emission matrix for each region
+        num_neurons = ExyT.shape[1]
+        W_full = np.zeros((num_neurons, ExxT.shape[0]))
+        region_ids = np.unique(region_identity).astype(int)
+        for region_id in region_ids:
+            latent_d = list_of_dims[region_id][0]
+            idx_neurons_this_region = np.where(region_identity==region_id)[0]
+            ExxT_region = ExxT[region_id*latent_d:(region_id+1)*latent_d, region_id*latent_d:(region_id+1)*latent_d]
+            if fit_intercept:
+                ExxT_region_extended = np.zeros((latent_d + 1, latent_d + 1))
+                ExxT_region_extended[:latent_d, :latent_d] = ExxT_region
+                ExxT_region_extended[:latent_d, latent_d] = ExxT[region_id*latent_d:(region_id+1)*latent_d, -1]
+                ExxT_region_extended[latent_d, :latent_d] = ExxT[-1, region_id*latent_d:(region_id+1)*latent_d]
+                ExxT_region_extended[latent_d, latent_d] = ExxT[-1, -1]
+                ExyT_region = ExyT[region_id*latent_d:(region_id+1)*latent_d, idx_neurons_this_region]
+                ExyT_region_extended = np.concatenate((ExyT_region, ExyT[-1, idx_neurons_this_region].reshape(1,-1)), axis=0)
+                solution = np.linalg.solve(ExxT_region_extended, ExyT_region_extended).T
+                W_full[idx_neurons_this_region, region_id*latent_d:(region_id+1)*latent_d] = solution[:, :latent_d]
+                W_full[idx_neurons_this_region, -1] = solution[:, -1]
+            else:
+                ExyT_region = ExyT[region_id*latent_d:(region_id+1)*latent_d, idx_neurons_this_region]
+                solution = np.linalg.solve(ExxT_region, ExyT_region).T
+                W_full[idx_neurons_this_region, region_id*latent_d:(region_id+1)*latent_d] = solution
+    else:
+        W_full = solve_neuron_wise_regression_for_C(ExxT, ExyT, fit_intercept, initial_C, list_of_dims, region_identity, cell_identity)
 
     # Compute expected error for covariance matrix estimate
     expected_err = EyyT - W_full @ ExyT - ExyT.T @ W_full.T + W_full @ ExxT @ W_full.T
     # Get MAP estimate of posterior covariance
     Sigma = (expected_err + Psi0 * np.eye(d)) / (nu0 + weight_sum + d + 1)
     Sigma = np.diag(np.diag(Sigma)) # force sigma to be diagonal
-
     if fit_intercept:
         return W_full[:, :-1], W_full[:, -1], Sigma
     else:
