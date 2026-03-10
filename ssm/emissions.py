@@ -466,9 +466,12 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
     def m_step(self, discrete_expectations, continuous_expectations,
                datas, inputs, masks, tags,
                optimizer="bfgs", maxiter=100, **kwargs):
-        Xs = [np.column_stack([x, u]) for x, u in
-              zip(continuous_expectations, inputs)]
+        
+        # modifying to assume F is forced to be 0 matrix
+        # so that there is no input dependence in the emissions
         ys = datas
+        Xs = [np.column_stack([x]) for (_, x, _, _), u in
+             zip(continuous_expectations, inputs)]
         ExxT, ExyT, EyyT, weight_sum = self._compute_statistics_for_m_step(ys, inputs, masks, tags, continuous_expectations, discrete_expectations)
         ws = [Ez for (Ez, _, _) in discrete_expectations]
 
@@ -479,12 +482,14 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
             CF, d, Sigma = fit_linear_regression(
                 Xs, ys,
                 expectations=expectations,
-                prior_ExxT=1e-4 * np.eye(self.D + self.M + 1),
-                prior_ExyT=np.zeros((self.D + self.M + 1, self.N)))
+                prior_ExxT=1e-4 * np.eye(self.D + 1),
+                prior_ExyT=np.zeros((self.D + 1, self.N)))
             self.Cs = CF[None, :, :self.D]
-            self.Fs = CF[None, :, self.D:]
+            # self.Fs = CF[None, :, self.D:]
+            self.Fs = np.zeros((1, self.N, self.M))  # forcing F to be zero
             self.ds = d[None, :]
-            self.inv_etas = np.log(np.diag(Sigma))[None, :]
+            # self.inv_etas = np.log(np.diag(Sigma))[None, :]
+            self.inv_etas =  Sigma[None, :]
         else:
             Cs, Fs, ds, inv_etas = [], [], [], []
             for k in range(self.K):

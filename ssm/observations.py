@@ -1109,7 +1109,6 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 zip(expectations, continuous_expectations, inputs):
             
             ExxT = smoothed_sigmas + np.einsum('ti,tj->tij', Ex, Ex)
-            u0 = u[0].reshape((M, 1))
             u = u[lags:]
 
             gamma0 = Ez[0]
@@ -1196,14 +1195,16 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
             nu = self.nu0 + Ens[k]
             Sigmas[k] = (sqerr + self.Psi0) / (nu + D + 1) 
 
-            if init_counts[k] > 1e-8:
-                mu0_k = init_first_moments[k] / init_counts[k]
-                ExxT0_k = init_second_moments[k] / init_counts[k]
-                Sigma0_k = ExxT0_k - np.outer(mu0_k, mu0_k)
-                Sigma0_k = 0.5 * (Sigma0_k + Sigma0_k.T) + 1e-6 * np.eye(D)
-                # update the model's parameters
-                self.mu_init[k] = mu0_k
-                self._sqrt_Sigmas_init[k] = np.linalg.cholesky(Sigma0_k)
+            # check if init counts exists
+            if continuous_expectations is not None:
+                if init_counts[k] > 1e-8: # initial condition
+                    mu0_k = init_first_moments[k] / init_counts[k]
+                    ExxT0_k = init_second_moments[k] / init_counts[k]
+                    Sigma0_k = ExxT0_k - np.outer(mu0_k, mu0_k)
+                    Sigma0_k = 0.5 * (Sigma0_k + Sigma0_k.T) + 1e-6 * np.eye(D)
+                    # update the model's parameters
+                    self.mu_init[k] = mu0_k
+                    self._sqrt_Sigmas_init[k] = np.linalg.cholesky(Sigma0_k)
 
         # If any states are unused, set their parameters to a perturbation of a used state
         unused = np.where(Ens < 1)[0]

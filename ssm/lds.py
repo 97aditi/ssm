@@ -204,9 +204,6 @@ class SLDS(object):
         self.init_state_distn = copy.deepcopy(best_arhmm.init_state_distn)
         self.transitions = copy.deepcopy(best_arhmm.transitions)
         self.dynamics = copy.deepcopy(best_arhmm.observations)
-        # adding  a forced initialization of the input
-        self.dynamics.Vs[0] = np.ones((self.D, self.M))
-        self.dynamics.Vs[0][:,1] = -1
 
     def permute(self, perm):
         """
@@ -613,6 +610,7 @@ class SLDS(object):
         ]
             
         if type(self.dynamics) in exact_m_step_dynamics and self.dynamics.lags == 1:
+            print("Using exact M-step for dynamics.")
             # In this case, we can do an exact M-step on the dynamics by passing
             # in the true sufficient statistics for the continuous state.
             kwargs["continuous_expectations"] = variational_posterior.continuous_expectations
@@ -626,6 +624,7 @@ class SLDS(object):
 
         # Update emissions params. If the emission is Gaussian, we can do an exact update
         if isinstance(self.emissions, emssn.GaussianEmissions):
+            print("Using exact M-step for emissions.")
             continuous_expectations = variational_posterior.continuous_expectations
             self.emissions.m_step(discrete_expectations, 
                                 continuous_expectations,
