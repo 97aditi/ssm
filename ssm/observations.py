@@ -1369,7 +1369,7 @@ class AutoRegressiveCellTypeObservations(AutoRegressiveObservations):
         if continuous_expectations is None:
             ExuxuTs, ExuyTs, EyyTs, Ens = self._get_sufficient_statistics(expectations, datas, inputs)
         else:
-            ExuxuTs, ExuyTs, EyyTs, Ens = \
+            ExuxuTs, ExuyTs, EyyTs, Ens, init_counts, init_first_moments, init_second_moments = \
                 self._extend_given_sufficient_statistics(expectations, continuous_expectations, inputs)
 
         # Solve the linear regressions
@@ -1377,7 +1377,7 @@ class AutoRegressiveCellTypeObservations(AutoRegressiveObservations):
         Vs = np.zeros((K, D, M))
         bs = np.zeros((K, D))
         Sigmas = np.zeros((K, D, D))
-        
+
         for k in range(K):
             ExuxuTs_k = ExuxuTs[k][:D*lags+M, :D*lags+M]
             ExuyTs_k = ExuyTs[k][:D*lags+M]
@@ -1388,13 +1388,23 @@ class AutoRegressiveCellTypeObservations(AutoRegressiveObservations):
                                             ExuyTs_k, self.Sigmas[k])
             As[k] = Wk[:, :D * lags]
             Vs[k] = Wk[:, D * lags:D*lags+M]
-            bs[k] = np.zeros(D) 
+            bs[k] = np.zeros(D)
 
             # Solve for the MAP estimate of the covariance
             EWxyT =  Wk @ ExuyTs_k
             sqerr = EyyTs[k] - EWxyT.T - EWxyT + Wk @ ExuxuTs_k @ Wk.T
             nu = self.nu0 + Ens[k]
-            Sigmas[k] = (sqerr + self.Psi0) / (nu + D + 1) 
+            Sigmas[k] = (sqerr + self.Psi0) / (nu + D + 1)
+
+            # Update initial state distribution parameters
+            if continuous_expectations is not None:
+                if init_counts[k] > 1e-8:
+                    mu0_k = init_first_moments[k] / init_counts[k]
+                    ExxT0_k = init_second_moments[k] / init_counts[k]
+                    Sigma0_k = ExxT0_k - np.outer(mu0_k, mu0_k)
+                    Sigma0_k = 0.5 * (Sigma0_k + Sigma0_k.T) + 1e-6 * np.eye(D)
+                    self.mu_init[k] = mu0_k
+                    self._sqrt_Sigmas_init[k] = np.linalg.cholesky(Sigma0_k)
 
         # If any states are unused, set their parameters to a perturbation of a used state
         unused = np.where(Ens < 1)[0]
